@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17' # mesma versao do java.version do pom.xml
+          cache: maven
+
+      # Maven do runner em vez do mvnw: o wrapper do repo nao tem permissao de execucao.
+      - name: Testes
+        run: mvn -B test
