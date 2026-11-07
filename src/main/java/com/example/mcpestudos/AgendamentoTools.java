@@ -44,6 +44,9 @@ public class AgendamentoTools {
     private static final int SQLITE_CONSTRAINT = 19;
     private static final int SQLITE_CONSTRAINT_UNIQUE = 2067;
 
+    private static final String INFORME_DENTISTA = "Informe o ID do dentista (veja listarDentistas).";
+    private static final String INFORME_PACIENTE = "Informe o ID do paciente (veja buscarPaciente).";
+
     private static final String HORARIO_OCUPADO =
             "Esse horario ja esta ocupado. Consulte horariosLivres.";
 
@@ -106,8 +109,11 @@ public class AgendamentoTools {
             + "A clinica atende de segunda a sexta, em horarios cheios (08h a 11h e 14h a 17h). "
             + "Em 'hoje', horarios que ja passaram nao sao listados.")
     public Resultado<HorariosLivres> horariosLivres(
-            @ToolParam(description = "ID do dentista, obtido em listarDentistas") long dentistaId,
+            @ToolParam(description = "ID do dentista, obtido em listarDentistas") Long dentistaId,
             @ToolParam(description = "Data no formato AAAA-MM-DD, ex: 2026-11-10") String data) {
+        if (dentistaId == null) {
+            return Resultado.falha(INFORME_DENTISTA);
+        }
         LocalDate dia = parseData(data);
         if (dia == null) {
             return Resultado.falha("Data invalida. Use o formato AAAA-MM-DD.");
@@ -135,11 +141,17 @@ public class AgendamentoTools {
     @Tool(description = "Agenda uma consulta. Recusa horario ocupado, data passada e fim de semana. "
             + "So chame depois de confirmar paciente, dentista, data e horario com o usuario.")
     public Resultado<AgendamentoConfirmado> agendarConsulta(
-            @ToolParam(description = "ID do dentista, obtido em listarDentistas") long dentistaId,
-            @ToolParam(description = "ID do paciente, obtido em buscarPaciente") long pacienteId,
+            @ToolParam(description = "ID do dentista, obtido em listarDentistas") Long dentistaId,
+            @ToolParam(description = "ID do paciente, obtido em buscarPaciente") Long pacienteId,
             @ToolParam(description = "Data no formato AAAA-MM-DD") String data,
             @ToolParam(description = "Horario no formato HH:mm, ex: 09:00. Deve ser um horario cheio.") String hora,
             @ToolParam(description = "Procedimento, ex: Limpeza, Avaliacao, Canal") String procedimento) {
+        if (dentistaId == null) {
+            return Resultado.falha(INFORME_DENTISTA);
+        }
+        if (pacienteId == null) {
+            return Resultado.falha(INFORME_PACIENTE);
+        }
         LocalDate dia = parseData(data);
         if (dia == null) {
             return Resultado.falha("Data invalida. Use o formato AAAA-MM-DD.");
@@ -194,9 +206,12 @@ public class AgendamentoTools {
     @Tool(description = "Cancela uma consulta agendada pelo ID da consulta. So cancela consultas futuras. "
             + "A consulta nao e apagada: fica com status CANCELADA e o horario volta a ficar livre.")
     public Resultado<CancelamentoConfirmado> cancelarConsulta(
-            @ToolParam(description = "ID da consulta, obtido em consultasDoPaciente") long consultaId,
+            @ToolParam(description = "ID da consulta, obtido em consultasDoPaciente") Long consultaId,
             @ToolParam(description = "Motivo do cancelamento, se o usuario informar (ate "
                     + TAMANHO_MAXIMO_MOTIVO + " caracteres)", required = false) String motivo) {
+        if (consultaId == null) {
+            return Resultado.falha("Informe o ID da consulta (veja consultasDoPaciente).");
+        }
         String motivoOk = motivo == null || motivo.isBlank() ? null : motivo.trim();
         if (motivoOk != null && motivoOk.length() > TAMANHO_MAXIMO_MOTIVO) {
             return Resultado.falha("O motivo deve ter no maximo " + TAMANHO_MAXIMO_MOTIVO + " caracteres.");
@@ -234,17 +249,28 @@ public class AgendamentoTools {
         return Resultado.ok(new CancelamentoConfirmado(consultaId, consulta.data(), consulta.hora(), "CANCELADA"));
     }
 
-    @Tool(description = "Lista as consultas agendadas de um paciente, em ordem de data.")
-    public List<ConsultaResumo> consultasDoPaciente(
-            @ToolParam(description = "ID do paciente, obtido em buscarPaciente") long pacienteId) {
-        return jdbc.sql("SELECT c.id, c.data, c.hora, c.procedimento, d.nome AS dentista "
+    @Tool(description = "Lista as consultas de um paciente, em ordem de data, incluindo o historico. "
+            + "O status e AGENDADA para consultas futuras e REALIZADA para as que ja passaram. "
+            + "Consultas canceladas nao aparecem.")
+    public Resultado<List<ConsultaResumo>> consultasDoPaciente(
+            @ToolParam(description = "ID do paciente, obtido em buscarPaciente") Long pacienteId) {
+        if (pacienteId == null) {
+            return Resultado.falha(INFORME_PACIENTE);
+        }
+        List<ConsultaResumo> consultas = jdbc.sql("SELECT c.id, c.data, c.hora, c.procedimento, "
+                        + "d.nome AS dentista "
                         + "FROM consultas c JOIN dentistas d ON d.id = c.dentista_id "
                         + "WHERE c.paciente_id = :p AND c.status = 'AGENDADA' "
                         + "ORDER BY c.data, c.hora")
                 .param("p", pacienteId)
-                .query((rs, n) -> new ConsultaResumo(rs.getLong("id"), rs.getString("data"),
-                        rs.getString("hora"), rs.getString("procedimento"), rs.getString("dentista")))
+                .query((rs, n) -> {
+                    String data = rs.getString("data");
+                    String hora = rs.getString("hora");
+                    return new ConsultaResumo(rs.getLong("id"), data, hora, rs.getString("procedimento"),
+                            rs.getString("dentista"), statusExibido(data, hora));
+                })
                 .list();
+        return Resultado.ok(consultas);
     }
 
     // ---------- auxiliares (nao viram ferramentas) ----------
@@ -284,6 +310,14 @@ public class AgendamentoTools {
             return "A clinica nao atende aos fins de semana.";
         }
         return null;
+    }
+
+    /**
+     * Status mostrado ao usuario. No banco a consulta continua AGENDADA; "REALIZADA" e derivado: a consulta
+     * cujo inicio nao e mais futuro (pelo Clock) ja aconteceu. Mesmo criterio de {@link #jaPassou}.
+     */
+    private String statusExibido(String data, String hora) {
+        return jaPassou(LocalDate.parse(data), LocalTime.parse(hora, HORA_FMT)) ? "REALIZADA" : "AGENDADA";
     }
 
     /** Um horario so e agendavel se comecar depois de agora (fuso da clinica). */
