@@ -8,6 +8,5 @@ INSERT OR IGNORE INTO pacientes (id, nome, telefone) VALUES
     (2, 'João Pereira', '(31) 90000-0002'),
     (3, 'Maria Fernanda Costa', '(31) 90000-0003');
 
-INSERT INTO consultas (dentista_id, paciente_id, data, hora, procedimento)
-SELECT 1, 1, date('now', '+1 day'), '09:00', 'Limpeza'
-WHERE NOT EXISTS (SELECT 1 FROM consultas);
+-- A consulta de exemplo nao e mais criada aqui: date('now') do SQLite e UTC e erra o dia
+-- no fuso de Sao Paulo. Ela e gerada em Java (InicializacaoBanco) a partir do Clock.
