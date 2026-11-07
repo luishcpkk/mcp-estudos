@@ -25,3 +25,6 @@ replay_pid*
 
 # Maven build output
 target/
+
+# PDFs da base clinica podem conter prontuarios de pacientes: nao versionar por padrao
+src/main/resources/docs/*.pdf
