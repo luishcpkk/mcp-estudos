@@ -6,6 +6,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -16,6 +18,7 @@ import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 
+import com.example.mcpestudos.DocumentIngestionService.Classificacao;
 import com.example.mcpestudos.StatusIndexacao.Estado;
 
 /** PDFs sinteticos reais + SimpleVectorStore real; so o modelo de embeddings e falso. */
@@ -57,6 +60,66 @@ class DocumentIngestionServiceTest {
         assertThat(DocumentIngestionService.normalizarEspacos(null)).isEmpty();
     }
 
+    // ---------- escopo: a quem cada documento pertence ----------
+
+    @Test
+    void classificaPeloNomeDoArquivo() {
+        assertThat(DocumentIngestionService.classificar("protocolo-anestesia.pdf"))
+                .contains(new Classificacao("PROTOCOLO", null));
+        assertThat(DocumentIngestionService.classificar("PROTOCOLO-Anestesia.PDF"))
+                .contains(new Classificacao("PROTOCOLO", null));
+        assertThat(DocumentIngestionService.classificar("paciente-7-historico.pdf"))
+                .contains(new Classificacao("PACIENTE", 7L));
+        assertThat(DocumentIngestionService.classificar("Paciente-007-Historico Completo.pdf"))
+                .contains(new Classificacao("PACIENTE", 7L));
+    }
+
+    @Test
+    void negaPorPadraoQualquerNomeForaDoPadrao() {
+        for (String nome : new String[] {null, "", "historico_maria.pdf", "protocolo.pdf", "protocolo-.pdf",
+                "meu-protocolo-x.pdf", "protocolo-x.txt", "paciente-abc-x.pdf", "paciente-7.pdf", "paciente-7-.pdf",
+                "paciente--x.pdf", "paciente-7-x.pdf.bak", "paciente-99999999999999999999-x.pdf"}) {
+            assertThat(DocumentIngestionService.classificar(nome)).as("nome=%s", nome).isEqualTo(Optional.empty());
+        }
+    }
+
+    @Test
+    void gravaOEscopoNosMetadadosEJamaisIndexaOQueNaoSabeClassificar() throws IOException {
+        PdfsDeTeste.criar(dir.resolve("protocolo-geral.pdf"), ZORVEX);
+        PdfsDeTeste.criar(dir.resolve("paciente-1-historico.pdf"), "Historico da paciente Maria: alergia ao Calmaxil.");
+        PdfsDeTeste.criar(dir.resolve("paciente-2-historico.pdf"), "Historico do paciente Joao: hipertenso controlado.");
+        PdfsDeTeste.criar(dir.resolve("historico_maria.pdf"), "Prontuario confidencial SEGREDO sem identificacao.");
+
+        StatusIndexacao status = servico(500).ingerirDocumentos();
+
+        assertThat(status.estado()).isEqualTo(Estado.PRONTA);
+        assertThat(status.arquivos()).isEqualTo(3);
+        assertThat(status.arquivosNaoClassificados()).isEqualTo(1);
+        assertThat(status.trechos()).isEqualTo(3);
+
+        List<Document> todos = buscar("historico paciente protocolo anestesico alergia segredo prontuario", 100);
+        assertThat(todos).hasSize(3);
+        assertThat(todos).noneMatch(d -> d.getText().contains("SEGREDO"));
+        Map<String, Document> porArquivo = new java.util.HashMap<>();
+        todos.forEach(d -> porArquivo.put((String) d.getMetadata().get("file_name"), d));
+        assertThat(porArquivo.get("protocolo-geral.pdf").getMetadata())
+                .containsEntry("escopo", "PROTOCOLO").doesNotContainKey("paciente_id");
+        assertThat(porArquivo.get("paciente-1-historico.pdf").getMetadata())
+                .containsEntry("escopo", "PACIENTE").containsEntry("paciente_id", 1L);
+        assertThat(porArquivo.get("paciente-2-historico.pdf").getMetadata())
+                .containsEntry("escopo", "PACIENTE").containsEntry("paciente_id", 2L);
+    }
+
+    @Test
+    void pastaSoComArquivosNaoClassificadosFicaVaziaMasContaOsIgnorados() throws IOException {
+        PdfsDeTeste.criar(dir.resolve("historico_maria.pdf"), ZORVEX);
+
+        StatusIndexacao status = servico(500).ingerirDocumentos();
+
+        assertThat(status).isEqualTo(new StatusIndexacao(Estado.PRONTA, 0, 0, 0, 1, 0));
+        assertThat(buscar("anestesico", 10)).isEmpty();
+    }
+
     @Test
     void estadoInicialEhNaoIniciada() {
         assertThat(servico(500).getStatus().estado()).isEqualTo(Estado.NAO_INICIADA);
@@ -64,8 +127,8 @@ class DocumentIngestionServiceTest {
 
     @Test
     void indexaOsPdfsDaPastaPreservandoArquivoEPagina() throws IOException {
-        PdfsDeTeste.criar(dir.resolve("protocolos.pdf"), ZORVEX, CANAL);
-        PdfsDeTeste.criar(dir.resolve("gestantes.pdf"), CLAREAMENTO);
+        PdfsDeTeste.criar(dir.resolve("protocolo-geral.pdf"), ZORVEX, CANAL);
+        PdfsDeTeste.criar(dir.resolve("protocolo-gestantes.pdf"), CLAREAMENTO);
 
         StatusIndexacao status = servico(500).ingerirDocumentos();
 
@@ -76,11 +139,11 @@ class DocumentIngestionServiceTest {
 
         Document melhor = buscar("anestesico vasoconstritor pacientes hipertensos", 1).get(0);
         assertThat(melhor.getText()).contains("Zorvex");
-        assertThat(melhor.getMetadata()).containsEntry("file_name", "protocolos.pdf");
+        assertThat(melhor.getMetadata()).containsEntry("file_name", "protocolo-geral.pdf");
         assertThat(((Number) melhor.getMetadata().get("page_number")).intValue()).isEqualTo(1);
 
         Document canal = buscar("radiografia periapical antes do tratamento de canal", 1).get(0);
-        assertThat(canal.getMetadata()).containsEntry("file_name", "protocolos.pdf");
+        assertThat(canal.getMetadata()).containsEntry("file_name", "protocolo-geral.pdf");
         assertThat(((Number) canal.getMetadata().get("page_number")).intValue()).isEqualTo(2);
         assertThat(canal.getText()).contains("obrigatória"); // acentos sobrevivem a extracao
     }
@@ -91,7 +154,7 @@ class DocumentIngestionServiceTest {
         for (int i = 0; i < 40; i++) {
             longo.append("Frase ").append(i).append(" sobre higiene bucal e escovacao diaria com fio dental. ");
         }
-        PdfsDeTeste.criar(dir.resolve("longo.pdf"), longo.toString());
+        PdfsDeTeste.criar(dir.resolve("protocolo-longo.pdf"), longo.toString());
 
         StatusIndexacao status = servico(100).ingerirDocumentos();
 
@@ -99,13 +162,13 @@ class DocumentIngestionServiceTest {
         assertThat(status.trechos()).isGreaterThan(1);
         assertThat(buscar("higiene bucal escovacao", 100))
                 .hasSize(status.trechos())
-                .allSatisfy(d -> assertThat(d.getMetadata()).containsEntry("file_name", "longo.pdf"));
+                .allSatisfy(d -> assertThat(d.getMetadata()).containsEntry("file_name", "protocolo-longo.pdf"));
     }
 
     @Test
     void pdfCorrompidoNaoImpedeOsDemais() throws IOException {
-        PdfsDeTeste.criar(dir.resolve("protocolos.pdf"), ZORVEX);
-        Files.writeString(dir.resolve("quebrado.pdf"), "isto nao e um pdf");
+        PdfsDeTeste.criar(dir.resolve("protocolo-geral.pdf"), ZORVEX);
+        Files.writeString(dir.resolve("protocolo-quebrado.pdf"), "isto nao e um pdf");
 
         StatusIndexacao status = servico(500).ingerirDocumentos();
 
@@ -117,8 +180,8 @@ class DocumentIngestionServiceTest {
 
     @Test
     void pdfSemTextoContaComoSemTextoENaoEIndexado() throws IOException {
-        PdfsDeTeste.criarEmBranco(dir.resolve("escaneado.pdf"));
-        PdfsDeTeste.criar(dir.resolve("protocolos.pdf"), ZORVEX);
+        PdfsDeTeste.criarEmBranco(dir.resolve("protocolo-escaneado.pdf"));
+        PdfsDeTeste.criar(dir.resolve("protocolo-geral.pdf"), ZORVEX);
 
         StatusIndexacao status = servico(500).ingerirDocumentos();
 
@@ -132,12 +195,12 @@ class DocumentIngestionServiceTest {
     void pastaSemPdfsFicaProntaEVazia() {
         StatusIndexacao status = servico(500).ingerirDocumentos();
 
-        assertThat(status).isEqualTo(new StatusIndexacao(Estado.PRONTA, 0, 0, 0, 0));
+        assertThat(status).isEqualTo(new StatusIndexacao(Estado.PRONTA, 0, 0, 0, 0, 0));
     }
 
     @Test
     void servicoDeEmbeddingsForaDoArFalhaSemDerrubarAInicializacao() throws IOException {
-        PdfsDeTeste.criar(dir.resolve("protocolos.pdf"), ZORVEX);
+        PdfsDeTeste.criar(dir.resolve("protocolo-geral.pdf"), ZORVEX);
         embedding.foraDoAr = true;
 
         StatusIndexacao status = servico(500).ingerirDocumentos(); // nao lanca
@@ -149,7 +212,7 @@ class DocumentIngestionServiceTest {
 
     @Test
     void ingestaoRodaUmaSoVezEntaoNaoDuplicaTrechos() throws IOException {
-        PdfsDeTeste.criar(dir.resolve("protocolos.pdf"), ZORVEX, CANAL);
+        PdfsDeTeste.criar(dir.resolve("protocolo-geral.pdf"), ZORVEX, CANAL);
         DocumentIngestionService servico = servico(500);
 
         StatusIndexacao primeira = servico.ingerirDocumentos();
