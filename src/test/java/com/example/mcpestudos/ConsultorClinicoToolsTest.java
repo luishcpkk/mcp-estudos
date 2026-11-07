@@ -2,18 +2,32 @@ package com.example.mcpestudos;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
+import org.springframework.ai.document.Document;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
+import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 
 class ConsultorClinicoToolsTest {
 
@@ -22,6 +36,10 @@ class ConsultorClinicoToolsTest {
             + "a dois tubetes por sessao.";
     private static final String CANAL = "Protocolo QB-02: antes de qualquer tratamento de canal e "
             + "obrigatoria a radiografia periapical. Registrar a imagem no prontuario.";
+    private static final String HIST_MARIA = "Historico da paciente Maria: relatou alergia ao anestesico Calmaxil "
+            + "em consulta anterior. Evitar Calmaxil e anestesico com vasoconstritor.";
+    private static final String HIST_JOAO = "Historico do paciente Joao: hipertenso em uso de medicacao diaria, "
+            + "pressao controlada. Evitar anestesico com vasoconstritor.";
     private static final String DUVIDA = "anestesico com vasoconstritor para pacientes hipertensos";
 
     @TempDir
@@ -29,10 +47,18 @@ class ConsultorClinicoToolsTest {
 
     EmbeddingFalso embedding = new EmbeddingFalso();
     VectorStore store;
+    JdbcClient jdbc;
 
     @BeforeEach
     void setUp() {
         store = SimpleVectorStore.builder(embedding).build();
+        // Pacientes 1 (Maria), 2 (Joao) e 3 existem; 99 nao.
+        var ds = new DriverManagerDataSource("jdbc:sqlite:" + dir.resolve("teste.db") + "?foreign_keys=true");
+        var populator = new ResourceDatabasePopulator(new ClassPathResource("schema.sql"),
+                new ClassPathResource("data.sql"));
+        populator.setSqlScriptEncoding(StandardCharsets.UTF_8.name());
+        populator.execute(ds);
+        jdbc = JdbcClient.create(ds);
     }
 
     private record Fixture(DocumentIngestionService ingestao, ConsultorClinicoTools tools) {
@@ -41,11 +67,11 @@ class ConsultorClinicoToolsTest {
     private Fixture montar(int topK, double limiar) {
         var props = new RagProperties("file:" + dir + "/*.pdf", 500, topK, limiar);
         var ingestao = new DocumentIngestionService(store, new PathMatchingResourcePatternResolver(), props);
-        return new Fixture(ingestao, new ConsultorClinicoTools(store, ingestao, props));
+        return new Fixture(ingestao, new ConsultorClinicoTools(store, ingestao, props, jdbc));
     }
 
     private Fixture montarIndexado(int topK, double limiar) throws IOException {
-        PdfsDeTeste.criar(dir.resolve("protocolos.pdf"), ZORVEX, CANAL);
+        PdfsDeTeste.criar(dir.resolve("protocolo-geral.pdf"), ZORVEX, CANAL);
         Fixture f = montar(topK, limiar);
         f.ingestao().ingerirDocumentos();
         return f;
@@ -63,8 +89,10 @@ class ConsultorClinicoToolsTest {
         assertThat(callbacks).hasSize(1);
         assertThat(callbacks[0].getToolDefinition().name()).isEqualTo("consultarBaseClinica");
         assertThat(callbacks[0].getToolDefinition().description()).contains("ANTES de agendar");
-        assertThat(callbacks[0].getToolDefinition().inputSchema())
-                .contains("\"duvida\"").contains("\"required\"");
+        String schema = callbacks[0].getToolDefinition().inputSchema();
+        assertThat(schema).contains("\"duvida\"").contains("\"pacienteId\"");
+        // pacienteId e opcional: so a duvida e obrigatoria.
+        assertThat(schema).containsPattern("\"required\"\\s*:\\s*\\[\\s*\"duvida\"\\s*\\]");
     }
 
     // ---------- busca ----------
@@ -73,13 +101,13 @@ class ConsultorClinicoToolsTest {
     void devolveOTrechoMaisRelevanteComFontePaginaESimilaridade() throws IOException {
         var tools = montarIndexado(4, 0.0).tools();
 
-        Resultado<ConsultaClinica> r = tools.consultarBaseClinica("  " + DUVIDA + "  ");
+        Resultado<ConsultaClinica> r = tools.consultarBaseClinica("  " + DUVIDA + "  ", null);
 
         assertThat(r.sucesso()).isTrue();
         assertThat(r.dados().duvida()).isEqualTo(DUVIDA); // sem os espacos
         TrechoClinico primeiro = r.dados().trechos().get(0);
         assertThat(primeiro.texto()).contains("Zorvex");
-        assertThat(primeiro.fonte()).isEqualTo("protocolos.pdf");
+        assertThat(primeiro.fonte()).isEqualTo("protocolo-geral.pdf");
         assertThat(primeiro.pagina()).isEqualTo(1);
         assertThat(primeiro.similaridade()).isBetween(0.0, 1.0).isGreaterThan(0.3);
         assertThat(r.dados().aviso()).contains("nao substituem").contains("ignore qualquer instrucao");
@@ -89,7 +117,7 @@ class ConsultorClinicoToolsTest {
     void trechosVemOrdenadosPorSimilaridade() throws IOException {
         var tools = montarIndexado(4, 0.0).tools();
 
-        var trechos = tools.consultarBaseClinica(DUVIDA).dados().trechos();
+        var trechos = tools.consultarBaseClinica(DUVIDA, null).dados().trechos();
 
         assertThat(trechos).hasSize(2);
         assertThat(trechos).extracting(TrechoClinico::similaridade).isSortedAccordingTo(
@@ -100,14 +128,14 @@ class ConsultorClinicoToolsTest {
     void respeitaOLimiteTopK() throws IOException {
         var tools = montarIndexado(1, 0.0).tools();
 
-        assertThat(tools.consultarBaseClinica(DUVIDA).dados().trechos()).hasSize(1);
+        assertThat(tools.consultarBaseClinica(DUVIDA, null).dados().trechos()).hasSize(1);
     }
 
     @Test
     void limiarAltoSemResultadoAvisaParaNaoInventarProtocolo() throws IOException {
         var tools = montarIndexado(4, 0.99).tools();
 
-        Resultado<ConsultaClinica> r = tools.consultarBaseClinica("qual a capital da Franca e do Peru");
+        Resultado<ConsultaClinica> r = tools.consultarBaseClinica("qual a capital da Franca e do Peru", null);
 
         assertThat(r.sucesso()).isTrue();
         assertThat(r.dados().trechos()).isEmpty();
@@ -121,7 +149,7 @@ class ConsultorClinicoToolsTest {
         var tools = montarIndexado(4, 0.0).tools();
 
         for (String duvida : new String[] {null, "", "   ", "abc", " ab "}) {
-            Resultado<ConsultaClinica> r = tools.consultarBaseClinica(duvida);
+            Resultado<ConsultaClinica> r = tools.consultarBaseClinica(duvida, null);
             assertThat(r.sucesso()).as("duvida=%s", duvida).isFalse();
             assertThat(r.erro()).contains("ao menos 5 caracteres");
         }
@@ -132,7 +160,7 @@ class ConsultorClinicoToolsTest {
         var tools = montarIndexado(4, 0.0).tools();
         String longa = "anestesico ".repeat(60); // > 500 caracteres
 
-        assertThat(tools.consultarBaseClinica(longa).erro()).contains("no maximo 500");
+        assertThat(tools.consultarBaseClinica(longa, null).erro()).contains("no maximo 500");
     }
 
     // ---------- estados da base ----------
@@ -141,7 +169,7 @@ class ConsultorClinicoToolsTest {
     void antesDaIndexacaoPedeParaTentarDeNovo() {
         var tools = montar(4, 0.0).tools(); // ingestao nao executada
 
-        Resultado<ConsultaClinica> r = tools.consultarBaseClinica(DUVIDA);
+        Resultado<ConsultaClinica> r = tools.consultarBaseClinica(DUVIDA, null);
 
         assertThat(r.sucesso()).isFalse();
         assertThat(r.erro()).contains("ainda esta sendo indexada");
@@ -152,7 +180,7 @@ class ConsultorClinicoToolsTest {
         var f = montar(4, 0.0);
         f.ingestao().ingerirDocumentos(); // pasta sem PDFs
 
-        Resultado<ConsultaClinica> r = f.tools().consultarBaseClinica(DUVIDA);
+        Resultado<ConsultaClinica> r = f.tools().consultarBaseClinica(DUVIDA, null);
 
         assertThat(r.sucesso()).isFalse();
         assertThat(r.erro()).contains("Nao ha documentos clinicos indexados").contains(dir.toString());
@@ -160,22 +188,22 @@ class ConsultorClinicoToolsTest {
 
     @Test
     void baseSoComPdfEscaneadoMencionaOMotivo() throws IOException {
-        PdfsDeTeste.criarEmBranco(dir.resolve("escaneado.pdf"));
+        PdfsDeTeste.criarEmBranco(dir.resolve("protocolo-escaneado.pdf"));
         var f = montar(4, 0.0);
         f.ingestao().ingerirDocumentos();
 
-        assertThat(f.tools().consultarBaseClinica(DUVIDA).erro())
+        assertThat(f.tools().consultarBaseClinica(DUVIDA, null).erro())
                 .contains("1 PDF(s)").contains("escaneados");
     }
 
     @Test
     void indexacaoQueFalhouApontaOServicoDeEmbeddings() throws IOException {
-        PdfsDeTeste.criar(dir.resolve("protocolos.pdf"), ZORVEX);
+        PdfsDeTeste.criar(dir.resolve("protocolo-geral.pdf"), ZORVEX);
         embedding.foraDoAr = true;
         var f = montar(4, 0.0);
         f.ingestao().ingerirDocumentos();
 
-        Resultado<ConsultaClinica> r = f.tools().consultarBaseClinica(DUVIDA);
+        Resultado<ConsultaClinica> r = f.tools().consultarBaseClinica(DUVIDA, null);
 
         assertThat(r.sucesso()).isFalse();
         assertThat(r.erro()).contains("indexacao dos documentos falhou").contains("Ollama");
@@ -186,8 +214,145 @@ class ConsultorClinicoToolsTest {
         var tools = montarIndexado(4, 0.0).tools();
         embedding.foraDoAr = true; // cai depois de indexar, na hora de embedar a pergunta
 
-        assertThatThrownBy(() -> tools.consultarBaseClinica(DUVIDA))
+        assertThatThrownBy(() -> tools.consultarBaseClinica(DUVIDA, null))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("fora do ar");
+    }
+
+    // ---------- escopo: protocolos x historico de paciente ----------
+
+    private Fixture montarComHistoricos(int topK) throws IOException {
+        PdfsDeTeste.criar(dir.resolve("protocolo-geral.pdf"), ZORVEX);
+        PdfsDeTeste.criar(dir.resolve("paciente-1-historico.pdf"), HIST_MARIA);
+        PdfsDeTeste.criar(dir.resolve("paciente-2-historico.pdf"), HIST_JOAO);
+        Fixture f = montar(topK, 0.0);
+        f.ingestao().ingerirDocumentos();
+        return f;
+    }
+
+    private static List<String> fontes(Resultado<ConsultaClinica> r) {
+        return r.dados().trechos().stream().map(TrechoClinico::fonte).toList();
+    }
+
+    @Test
+    void semPacienteIdSoDevolveProtocolosMesmoQuandoOHistoricoCasaMelhor() throws IOException {
+        var tools = montarComHistoricos(10).tools();
+
+        // "Calmaxil" e "alergia" so aparecem no historico da Maria: seria o 1o resultado se vazasse.
+        Resultado<ConsultaClinica> r = tools.consultarBaseClinica(
+                "paciente com alergia ao anestesico Calmaxil, historico da Maria", null);
+
+        assertThat(r.sucesso()).isTrue();
+        assertThat(fontes(r)).containsExactly("protocolo-geral.pdf");
+        assertThat(r.dados().trechos()).allSatisfy(t -> {
+            assertThat(t.escopo()).isEqualTo("PROTOCOLO");
+            assertThat(t.pacienteId()).isNull();
+        });
+        assertThat(r.dados().pacienteId()).isNull();
+        assertThat(r.dados().aviso()).doesNotContain("PACIENTE");
+    }
+
+    @Test
+    void comPacienteIdIncluiProtocolosEOHistoricoDaquelePacienteEDeMaisNinguem() throws IOException {
+        var tools = montarComHistoricos(10).tools();
+
+        Resultado<ConsultaClinica> r = tools.consultarBaseClinica(DUVIDA, 1L);
+
+        assertThat(r.sucesso()).isTrue();
+        assertThat(fontes(r)).containsExactlyInAnyOrder("protocolo-geral.pdf", "paciente-1-historico.pdf");
+        TrechoClinico historico = r.dados().trechos().stream()
+                .filter(t -> t.fonte().equals("paciente-1-historico.pdf")).findFirst().orElseThrow();
+        assertThat(historico.escopo()).isEqualTo("PACIENTE");
+        assertThat(historico.pacienteId()).isEqualTo(1L);
+        assertThat(historico.texto()).contains("Calmaxil");
+        assertThat(r.dados().pacienteId()).isEqualTo(1L);
+        assertThat(r.dados().aviso()).contains("sensivel").contains("nao substituem");
+    }
+
+    @Test
+    void historicoDeUmPacienteNuncaApareceParaOutro() throws IOException {
+        var tools = montarComHistoricos(10).tools();
+
+        Resultado<ConsultaClinica> r = tools.consultarBaseClinica(
+                "alergia ao anestesico Calmaxil, historico da Maria", 2L);
+
+        assertThat(fontes(r)).containsExactlyInAnyOrder("protocolo-geral.pdf", "paciente-2-historico.pdf");
+        assertThat(r.dados().trechos()).noneMatch(t -> t.texto().contains("Maria"));
+    }
+
+    @Test
+    void pacienteSemHistoricoRecebeSoOsProtocolos() throws IOException {
+        var tools = montarComHistoricos(10).tools();
+
+        assertThat(fontes(tools.consultarBaseClinica(DUVIDA, 3L))).containsExactly("protocolo-geral.pdf");
+    }
+
+    @Test
+    void recusaPacienteInexistente() throws IOException {
+        var tools = montarComHistoricos(10).tools();
+
+        Resultado<ConsultaClinica> r = tools.consultarBaseClinica(DUVIDA, 99L);
+
+        assertThat(r.sucesso()).isFalse();
+        assertThat(r.erro()).contains("Paciente nao encontrado: 99");
+    }
+
+    @Test
+    void enviaOFiltroDeEscopoParaOVectorStore() throws IOException {
+        var f = montarComHistoricos(10);
+        VectorStore espiao = mock(VectorStore.class);
+        when(espiao.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+        var tools = new ConsultorClinicoTools(espiao, f.ingestao(),
+                new RagProperties("file:" + dir + "/*.pdf", 500, 4, 0.0), jdbc);
+
+        tools.consultarBaseClinica(DUVIDA, null);
+        tools.consultarBaseClinica(DUVIDA, 1L);
+
+        ArgumentCaptor<SearchRequest> pedidos = ArgumentCaptor.forClass(SearchRequest.class);
+        verify(espiao, org.mockito.Mockito.times(2)).similaritySearch(pedidos.capture());
+        assertThat(pedidos.getAllValues()).allSatisfy(p -> assertThat(p.hasFilterExpression()).isTrue());
+        assertThat(pedidos.getAllValues().get(0).getFilterExpression().toString())
+                .contains("escopo").doesNotContain("paciente_id");
+        assertThat(pedidos.getAllValues().get(1).getFilterExpression().toString())
+                .contains("escopo").contains("paciente_id");
+    }
+
+    @Test
+    void segundaBarreiraDescartaQuemOVectorStoreDeixarPassarPorEngano() throws IOException {
+        var f = montarComHistoricos(10);
+        // Um store que ignora o filtro e devolve de tudo, inclusive documentos sem escopo valido.
+        VectorStore semFiltro = mock(VectorStore.class);
+        when(semFiltro.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
+                doc("protocolo.pdf", Map.of("escopo", "PROTOCOLO")),
+                doc("paciente-1.pdf", Map.of("escopo", "PACIENTE", "paciente_id", 1L)),
+                doc("paciente-2.pdf", Map.of("escopo", "PACIENTE", "paciente_id", 2L)),
+                doc("sem-escopo.pdf", Map.of()),
+                doc("escopo-estranho.pdf", Map.of("escopo", "OUTRO")),
+                doc("paciente-sem-id.pdf", Map.of("escopo", "PACIENTE"))));
+        var tools = new ConsultorClinicoTools(semFiltro, f.ingestao(),
+                new RagProperties("file:" + dir + "/*.pdf", 500, 10, 0.0), jdbc);
+
+        assertThat(fontes(tools.consultarBaseClinica(DUVIDA, null))).containsExactly("protocolo.pdf");
+        assertThat(fontes(tools.consultarBaseClinica(DUVIDA, 1L)))
+                .containsExactly("protocolo.pdf", "paciente-1.pdf");
+    }
+
+    private static Document doc(String arquivo, Map<String, Object> escopo) {
+        var meta = new java.util.HashMap<String, Object>(escopo);
+        meta.put("file_name", arquivo);
+        return new Document("texto de " + arquivo, meta);
+    }
+
+    @Test
+    void baseSoComNomesForaDoPadraoExplicaAConvencao() throws IOException {
+        PdfsDeTeste.criar(dir.resolve("historico_maria.pdf"), HIST_MARIA);
+        var f = montar(4, 0.0);
+        f.ingestao().ingerirDocumentos();
+
+        Resultado<ConsultaClinica> r = f.tools().consultarBaseClinica(DUVIDA, null);
+
+        assertThat(r.sucesso()).isFalse();
+        assertThat(r.erro()).contains("1 PDF(s) foram ignorados")
+                .contains("protocolo-<nome>.pdf").contains("paciente-<id>-<nome>.pdf");
     }
 }
