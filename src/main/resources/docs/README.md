@@ -31,6 +31,9 @@ pergunta nem o texto). Quem pediu o histórico de outro paciente de propósito d
 ## Outras regras
 
 - Só PDFs com **texto selecionável** são indexados; PDFs escaneados (apenas imagem) são ignorados.
+- Um PDF cujo texto parece conter **instruções dirigidas ao assistente** (por exemplo "ignore as instruções anteriores", ou o nome
+  de uma ferramenta do servidor) é **isolado inteiro**: nada dele é indexado, e o log diz quais regras dispararam e em que
+  páginas. Veja *Defesa contra injeção de prompt nos PDFs* no [README do projeto](../../../../README.md).
 - Os `*.pdf` desta pasta **não são versionados** (veja o `.gitignore`), para que prontuários não vão parar
   no GitHub. Para versionar um protocolo público: `git add -f`.
 - Para usar uma pasta fora do projeto, defina `clinica.rag.docs-location`, por exemplo

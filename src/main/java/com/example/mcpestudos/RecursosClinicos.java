@@ -44,8 +44,11 @@ public class RecursosClinicos {
 
     private static final Locale PT_BR = Locale.forLanguageTag("pt-BR");
 
-    /** Indice dos protocolos; {@code estado} diz se a indexacao ja terminou. */
-    record IndiceDeProtocolos(String estado, List<ItemDoIndice> protocolos) {
+    /**
+     * Indice dos protocolos; {@code estado} diz se a indexacao ja terminou e {@code arquivosEmQuarentena} quantos PDFs
+     * foram isolados por conterem instrucoes dirigidas ao assistente (eles nao aparecem na lista).
+     */
+    record IndiceDeProtocolos(String estado, int arquivosEmQuarentena, List<ItemDoIndice> protocolos) {
     }
 
     record ItemDoIndice(String arquivo, String uri, int paginas, int trechos) {
@@ -100,7 +103,8 @@ public class RecursosClinicos {
         ingestao.getProtocolosIndexados().forEach((arquivo, trechos) -> itens.add(new ItemDoIndice(arquivo,
                 URI_PROTOCOLOS + "/" + codificar(arquivo),
                 (int) trechos.stream().map(TrechoDeProtocolo::pagina).distinct().count(), trechos.size())));
-        return json.writeValueAsString(new IndiceDeProtocolos(ingestao.getStatus().estado().name(), itens));
+        StatusIndexacao status = ingestao.getStatus();
+        return json.writeValueAsString(new IndiceDeProtocolos(status.estado().name(), status.arquivosEmQuarentena(), itens));
     }
 
     @McpResource(uri = URI_PROTOCOLOS + "/{arquivo}", name = "protocolo", title = "Texto de um protocolo",
