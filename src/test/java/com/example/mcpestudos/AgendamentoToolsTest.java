@@ -18,8 +18,10 @@ import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.UncategorizedSQLException;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /** SQLite real em arquivo temporario, com a mesma URL (foreign_keys=true) da aplicacao. */
 class AgendamentoToolsTest {
@@ -44,7 +46,19 @@ class AgendamentoToolsTest {
         populator.setSqlScriptEncoding(StandardCharsets.UTF_8.name());
         populator.execute(ds);
         jdbc = JdbcClient.create(ds);
-        tools = new AgendamentoTools(jdbc, Clock.fixed(AGORA, SP));
+        tools = new AgendamentoTools(jdbc, Clock.fixed(AGORA, SP), new TransactionTemplate(new DataSourceTransactionManager(ds)));
+    }
+
+    /**
+     * Atalho para os testes que so precisam de uma consulta criada: prepara e confirma em sequencia, como o usuario
+     * que diz "sim" logo em seguida. Se o preparo recusa, devolve a mesma recusa (o que o usuario veria).
+     * O fluxo de dois passos em si e testado em {@link AgendamentoEmDoisPassosTest}.
+     */
+    private Resultado<AgendamentoConfirmado> agendar(Long dentistaId, Long pacienteId, String data, String hora,
+                                                     String procedimento) {
+        Resultado<PropostaAgendamento> proposta = tools.prepararAgendamento(dentistaId, pacienteId, data, hora, procedimento);
+        return proposta.sucesso() ? tools.confirmarAgendamento(proposta.dados().codigoConfirmacao())
+                : Resultado.falha(proposta.erro());
     }
 
     // ---------- banco ----------
@@ -111,7 +125,7 @@ class AgendamentoToolsTest {
     @Test
     void horariosLivresDeDiaFuturoListamTodosMenosOsOcupados() {
         assertThat(tools.horariosLivres(1L, TERCA).dados().horariosLivres()).hasSize(8);
-        tools.agendarConsulta(1L, 1L, TERCA, "09:00", "Limpeza");
+        agendar(1L, 1L, TERCA, "09:00", "Limpeza");
         assertThat(tools.horariosLivres(1L, TERCA).dados().horariosLivres())
                 .hasSize(7).doesNotContain("09:00");
     }
@@ -128,7 +142,7 @@ class AgendamentoToolsTest {
 
     @Test
     void agendaComSucessoEDevolveOId() {
-        Resultado<AgendamentoConfirmado> r = tools.agendarConsulta(1L, 1L, TERCA, " 09:00 ", " Limpeza ");
+        Resultado<AgendamentoConfirmado> r = agendar(1L, 1L, TERCA, " 09:00 ", " Limpeza ");
         assertThat(r.sucesso()).isTrue();
         assertThat(r.dados().consultaId()).isPositive();
         assertThat(r.dados()).extracting(AgendamentoConfirmado::data, AgendamentoConfirmado::hora,
@@ -137,42 +151,43 @@ class AgendamentoToolsTest {
 
     @Test
     void horarioOcupadoViraRecusaDeNegocio() {
-        assertThat(tools.agendarConsulta(1L, 1L, TERCA, "09:00", "Limpeza").sucesso()).isTrue();
-        // Sem checagem previa: aqui quem recusa e a violacao do indice UNIQUE.
-        Resultado<AgendamentoConfirmado> r = tools.agendarConsulta(1L, 2L, TERCA, "09:00", "Canal");
+        assertThat(agendar(1L, 1L, TERCA, "09:00", "Limpeza").sucesso()).isTrue();
+        // O segundo pedido ja e recusado ao PREPARAR (nao se mostra resumo de horario ocupado). A corrida entre duas
+        // propostas validas e a violacao do indice UNIQUE sao testadas em AgendamentoEmDoisPassosTest.
+        Resultado<AgendamentoConfirmado> r = agendar(1L, 2L, TERCA, "09:00", "Canal");
         assertThat(r.sucesso()).isFalse();
         assertThat(r.erro()).contains("ocupado");
     }
 
     @Test
     void mesmoHorarioEmOutroDentistaEPermitido() {
-        assertThat(tools.agendarConsulta(1L, 1L, TERCA, "09:00", "Limpeza").sucesso()).isTrue();
-        assertThat(tools.agendarConsulta(2L, 2L, TERCA, "09:00", "Avaliacao").sucesso()).isTrue();
+        assertThat(agendar(1L, 1L, TERCA, "09:00", "Limpeza").sucesso()).isTrue();
+        assertThat(agendar(2L, 2L, TERCA, "09:00", "Avaliacao").sucesso()).isTrue();
     }
 
     @Test
     void recusaHorarioDeHojeQueJaPassou() {
-        assertThat(tools.agendarConsulta(1L, 1L, HOJE, "10:00", "Limpeza").erro()).contains("ja passou");
-        assertThat(tools.agendarConsulta(1L, 1L, HOJE, "11:00", "Limpeza").sucesso()).isTrue();
+        assertThat(agendar(1L, 1L, HOJE, "10:00", "Limpeza").erro()).contains("ja passou");
+        assertThat(agendar(1L, 1L, HOJE, "11:00", "Limpeza").sucesso()).isTrue();
     }
 
     @Test
     void recusaEntradasInvalidas() {
-        assertThat(tools.agendarConsulta(1L, 1L, "x", "09:00", "Limpeza").erro()).contains("Data invalida");
-        assertThat(tools.agendarConsulta(1L, 1L, TERCA, "09:30", "Limpeza").erro()).contains("Horario invalido");
-        assertThat(tools.agendarConsulta(1L, 1L, TERCA, "9:00", "Limpeza").erro()).contains("Horario invalido");
-        assertThat(tools.agendarConsulta(1L, 1L, TERCA, null, "Limpeza").erro()).contains("Horario invalido");
-        assertThat(tools.agendarConsulta(1L, 1L, "2026-11-14", "09:00", "Limpeza").erro()).contains("fins de semana");
-        assertThat(tools.agendarConsulta(99L, 1L, TERCA, "09:00", "Limpeza").erro()).contains("Dentista");
-        assertThat(tools.agendarConsulta(1L, 99L, TERCA, "09:00", "Limpeza").erro()).contains("Paciente");
-        assertThat(tools.agendarConsulta(1L, 1L, TERCA, "09:00", "  ").erro()).contains("procedimento");
+        assertThat(agendar(1L, 1L, "x", "09:00", "Limpeza").erro()).contains("Data invalida");
+        assertThat(agendar(1L, 1L, TERCA, "09:30", "Limpeza").erro()).contains("Horario invalido");
+        assertThat(agendar(1L, 1L, TERCA, "9:00", "Limpeza").erro()).contains("Horario invalido");
+        assertThat(agendar(1L, 1L, TERCA, null, "Limpeza").erro()).contains("Horario invalido");
+        assertThat(agendar(1L, 1L, "2026-11-14", "09:00", "Limpeza").erro()).contains("fins de semana");
+        assertThat(agendar(99L, 1L, TERCA, "09:00", "Limpeza").erro()).contains("Dentista");
+        assertThat(agendar(1L, 99L, TERCA, "09:00", "Limpeza").erro()).contains("Paciente");
+        assertThat(agendar(1L, 1L, TERCA, "09:00", "  ").erro()).contains("procedimento");
     }
 
     // ---------- cancelarConsulta ----------
 
     @Test
     void cancelaSemApagarERegistraMotivoEData() {
-        long id = tools.agendarConsulta(1L, 1L, TERCA, "09:00", "Limpeza").dados().consultaId();
+        long id = agendar(1L, 1L, TERCA, "09:00", "Limpeza").dados().consultaId();
 
         Resultado<CancelamentoConfirmado> r = tools.cancelarConsulta(id, "  Paciente viajou  ");
 
@@ -185,12 +200,12 @@ class AgendamentoToolsTest {
                 .containsEntry("cancelada_em", "2026-11-09T10:30");
         // Linha preservada e horario liberado para novo agendamento.
         assertThat(tools.consultasDoPaciente(1L).dados()).isEmpty();
-        assertThat(tools.agendarConsulta(1L, 2L, TERCA, "09:00", "Canal").sucesso()).isTrue();
+        assertThat(agendar(1L, 2L, TERCA, "09:00", "Canal").sucesso()).isTrue();
     }
 
     @Test
     void cancelarSemMotivoGravaNulo() {
-        long id = tools.agendarConsulta(1L, 1L, TERCA, "09:00", "Limpeza").dados().consultaId();
+        long id = agendar(1L, 1L, TERCA, "09:00", "Limpeza").dados().consultaId();
         assertThat(tools.cancelarConsulta(id, null).sucesso()).isTrue();
         assertThat(jdbc.sql("SELECT motivo_cancelamento FROM consultas WHERE id = :id").param("id", id)
                 .query(String.class).optional()).isEmpty();
@@ -198,7 +213,7 @@ class AgendamentoToolsTest {
 
     @Test
     void naoCancelaDuasVezes() {
-        long id = tools.agendarConsulta(1L, 1L, TERCA, "09:00", "Limpeza").dados().consultaId();
+        long id = agendar(1L, 1L, TERCA, "09:00", "Limpeza").dados().consultaId();
         assertThat(tools.cancelarConsulta(id, null).sucesso()).isTrue();
         assertThat(tools.cancelarConsulta(id, null).erro()).contains("nao esta agendada");
     }
@@ -223,7 +238,7 @@ class AgendamentoToolsTest {
 
     @Test
     void recusaMotivoLongoDemais() {
-        long id = tools.agendarConsulta(1L, 1L, TERCA, "09:00", "Limpeza").dados().consultaId();
+        long id = agendar(1L, 1L, TERCA, "09:00", "Limpeza").dados().consultaId();
         String longo = "x".repeat(AgendamentoTools.TAMANHO_MAXIMO_MOTIVO + 1);
         assertThat(tools.cancelarConsulta(id, longo).erro()).contains("no maximo");
         assertThat(tools.consultasDoPaciente(1L).dados()).hasSize(1);
@@ -244,7 +259,7 @@ class AgendamentoToolsTest {
         inserirConsulta(1, 1, "2026-10-01", "09:00", "AGENDADA"); // meses atras
         inserirConsulta(1, 1, HOJE, "10:00", "AGENDADA");         // hoje, 30 min atras
         inserirConsulta(1, 1, HOJE, "11:00", "AGENDADA");         // hoje, daqui a 30 min
-        tools.agendarConsulta(1L, 1L, TERCA, "09:00", "Canal");   // amanha
+        agendar(1L, 1L, TERCA, "09:00", "Canal");   // amanha
 
         List<ConsultaResumo> consultas = tools.consultasDoPaciente(1L).dados();
 
@@ -284,8 +299,8 @@ class AgendamentoToolsTest {
     @Test
     void idsNulosViramRecusaClaraEmVezDeZero() {
         assertThat(tools.horariosLivres(null, TERCA).erro()).contains("ID do dentista");
-        assertThat(tools.agendarConsulta(null, 1L, TERCA, "09:00", "Limpeza").erro()).contains("ID do dentista");
-        assertThat(tools.agendarConsulta(1L, null, TERCA, "09:00", "Limpeza").erro()).contains("ID do paciente");
+        assertThat(agendar(null, 1L, TERCA, "09:00", "Limpeza").erro()).contains("ID do dentista");
+        assertThat(agendar(1L, null, TERCA, "09:00", "Limpeza").erro()).contains("ID do paciente");
         assertThat(tools.consultasDoPaciente(null).erro()).contains("ID do paciente");
         assertThat(tools.cancelarConsulta(null, null).erro()).contains("ID da consulta");
     }
