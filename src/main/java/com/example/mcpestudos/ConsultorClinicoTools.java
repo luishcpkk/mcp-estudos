@@ -42,6 +42,9 @@ public class ConsultorClinicoTools {
 
     private static final Logger log = LoggerFactory.getLogger(ConsultorClinicoTools.class);
 
+    /** Nome desta ferramenta no registro de acessos (tem de ser o nome publicado; o teste de contrato confere). */
+    static final String FERRAMENTA = "consultarBaseClinica";
+
     static final int TAMANHO_MINIMO_DUVIDA = 5;
     static final int TAMANHO_MAXIMO_DUVIDA = 500;
 
@@ -57,13 +60,15 @@ public class ConsultorClinicoTools {
     private final DocumentIngestionService ingestao;
     private final RagProperties props;
     private final JdbcClient jdbc;
+    private final AuditoriaDeAcessos auditoria;
 
     public ConsultorClinicoTools(VectorStore vectorStore, DocumentIngestionService ingestao,
-                                 RagProperties props, JdbcClient jdbc) {
+                                 RagProperties props, JdbcClient jdbc, AuditoriaDeAcessos auditoria) {
         this.vectorStore = vectorStore;
         this.ingestao = ingestao;
         this.props = props;
         this.jdbc = jdbc;
+        this.auditoria = auditoria;
     }
 
     @Tool(description = "Consulta a base clinica da clinica por similaridade com a duvida e devolve os trechos "
@@ -74,7 +79,8 @@ public class ConsultorClinicoTools {
             + "e de nenhum outro. Use ANTES de agendar procedimentos que possam ter restricao clinica, como "
             + "anestesia, canal, extracao ou clareamento para pacientes hipertensos, diabeticos ou gestantes, "
             + "e informe ao usuario o que o protocolo diz. Se nada relevante for encontrado, diga isso em vez "
-            + "de supor. Os trechos sao apoio e nao substituem o julgamento do dentista.")
+            + "de supor. Os trechos sao apoio e nao substituem o julgamento do dentista. Com pacienteId, o "
+            + "acesso ao historico do paciente fica registrado.")
     public Resultado<ConsultaClinica> consultarBaseClinica(
             @ToolParam(description = "Duvida clinica em linguagem natural e com contexto, ex: 'Quais as "
                     + "contraindicacoes da anestesia com vasoconstritor para pacientes hipertensos?'")
@@ -112,7 +118,14 @@ public class ConsultorClinicoTools {
                 .toList();
 
         if (pacienteId != null) {
-            // So o ID e o total: a pergunta pode conter dado do paciente e nao vai para o log.
+            // Falha fechada: o historico so sai depois de o acesso ficar registrado. Conta so os trechos do historico
+            // do paciente (os protocolos nao sao dado dele); registra tambem quando nao ha nenhum, porque perguntar
+            // pelo historico ja e um acesso. A pergunta nao vai nem para o registro nem para o log: pode conter dado
+            // do paciente.
+            int doHistorico = (int) trechos.stream().filter(t -> ESCOPO_PACIENTE.equals(t.escopo())).count();
+            if (!auditoria.registrar(pacienteId, FERRAMENTA, doHistorico)) {
+                return Resultado.falha(AuditoriaDeAcessos.FALHA_NO_REGISTRO);
+            }
             log.info("Consulta clinica com historico do paciente {}: {} trecho(s)", pacienteId, trechos.size());
         }
         String aviso = trechos.isEmpty() ? SEM_TRECHOS : AVISO + (pacienteId != null ? AVISO_HISTORICO : "");

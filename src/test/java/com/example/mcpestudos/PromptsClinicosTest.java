@@ -99,6 +99,7 @@ class PromptsClinicosTest {
         assertThat(roteiro).contains("paciente de ID 104", "consultasDoPaciente")
                 .contains("consultarBaseClinica, informando o pacienteId 104")
                 .contains("dados sensíveis")
+                .contains("Cada acesso ao histórico fica registrado", "acessosAoHistorico")
                 .contains("Se a base não tiver histórico do paciente, diga isso claramente em vez de supor")
                 .contains("Não proponha tratamento nem prescrição");
     }

@@ -1,4 +1,20 @@
 {
+  "acessosAoHistorico" : {
+    "inputSchema" : {
+      "$schema" : "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties" : false,
+      "properties" : {
+        "limite" : {
+          "type" : "integer"
+        },
+        "pacienteId" : {
+          "type" : "integer"
+        }
+      },
+      "required" : [ "pacienteId" ],
+      "type" : "object"
+    }
+  },
   "buscarPaciente" : {
     "inputSchema" : {
       "$schema" : "https://json-schema.org/draft/2020-12/schema",

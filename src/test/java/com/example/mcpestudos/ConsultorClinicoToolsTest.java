@@ -10,6 +10,9 @@ import static org.mockito.Mockito.when;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 
@@ -48,6 +51,7 @@ class ConsultorClinicoToolsTest {
     EmbeddingFalso embedding = new EmbeddingFalso();
     VectorStore store;
     JdbcClient jdbc;
+    AuditoriaDeAcessos auditoria;
 
     @BeforeEach
     void setUp() {
@@ -59,6 +63,8 @@ class ConsultorClinicoToolsTest {
         populator.setSqlScriptEncoding(StandardCharsets.UTF_8.name());
         populator.execute(ds);
         jdbc = JdbcClient.create(ds);
+        auditoria = new AuditoriaDeAcessos(jdbc, Clock.fixed(Instant.parse("2026-11-09T13:30:00Z"),
+                ZoneId.of("America/Sao_Paulo")));
     }
 
     private record Fixture(DocumentIngestionService ingestao, ConsultorClinicoTools tools) {
@@ -67,7 +73,7 @@ class ConsultorClinicoToolsTest {
     private Fixture montar(int topK, double limiar) {
         var props = new RagProperties("file:" + dir + "/*.pdf", 500, topK, limiar);
         var ingestao = new DocumentIngestionService(store, new PathMatchingResourcePatternResolver(), props);
-        return new Fixture(ingestao, new ConsultorClinicoTools(store, ingestao, props, jdbc));
+        return new Fixture(ingestao, new ConsultorClinicoTools(store, ingestao, props, jdbc, auditoria));
     }
 
     private Fixture montarIndexado(int topK, double limiar) throws IOException {
@@ -303,7 +309,7 @@ class ConsultorClinicoToolsTest {
         VectorStore espiao = mock(VectorStore.class);
         when(espiao.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
         var tools = new ConsultorClinicoTools(espiao, f.ingestao(),
-                new RagProperties("file:" + dir + "/*.pdf", 500, 4, 0.0), jdbc);
+                new RagProperties("file:" + dir + "/*.pdf", 500, 4, 0.0), jdbc, auditoria);
 
         tools.consultarBaseClinica(DUVIDA, null);
         tools.consultarBaseClinica(DUVIDA, 1L);
@@ -330,11 +336,103 @@ class ConsultorClinicoToolsTest {
                 doc("escopo-estranho.pdf", Map.of("escopo", "OUTRO")),
                 doc("paciente-sem-id.pdf", Map.of("escopo", "PACIENTE"))));
         var tools = new ConsultorClinicoTools(semFiltro, f.ingestao(),
-                new RagProperties("file:" + dir + "/*.pdf", 500, 10, 0.0), jdbc);
+                new RagProperties("file:" + dir + "/*.pdf", 500, 10, 0.0), jdbc, auditoria);
 
         assertThat(fontes(tools.consultarBaseClinica(DUVIDA, null))).containsExactly("protocolo.pdf");
         assertThat(fontes(tools.consultarBaseClinica(DUVIDA, 1L)))
                 .containsExactly("protocolo.pdf", "paciente-1.pdf");
+        // O registro conta so o que de fato foi devolvido (depois da segunda barreira): 1 trecho do historico do 1.
+        assertThat(auditoria.ultimos(1L, 10)).extracting(AcessoAoHistorico::trechos).containsExactly(1);
+    }
+
+    // ---------- auditoria: todo acesso ao historico fica registrado, e sem registro nao ha historico ----------
+
+    private int totalDeRegistros() {
+        return jdbc.sql("SELECT COUNT(*) FROM acessos_ao_historico").query(Integer.class).single();
+    }
+
+    @Test
+    void consultaComPacienteIdRegistraOAcessoComOTotalDeTrechosDoHistorico() throws IOException {
+        var tools = montarComHistoricos(10).tools();
+
+        Resultado<ConsultaClinica> r = tools.consultarBaseClinica(DUVIDA, 1L);
+
+        assertThat(r.dados().trechos()).hasSize(2);   // 1 protocolo + 1 do historico
+        List<AcessoAoHistorico> acessos = auditoria.ultimos(1L, 10);
+        assertThat(acessos).hasSize(1);
+        assertThat(acessos.get(0).ferramenta()).isEqualTo("consultarBaseClinica");
+        assertThat(acessos.get(0).trechos()).isEqualTo(1);       // so os do historico; o protocolo nao e dado dele
+        assertThat(acessos.get(0).acessadoEm()).isEqualTo("2026-11-09T10:30:00-03:00");
+        assertThat(auditoria.total(2L)).isZero();                 // so o paciente consultado
+    }
+
+    @Test
+    void pacienteSemHistoricoIndexadoTambemRegistraComZeroTrechos() throws IOException {
+        var tools = montarComHistoricos(10).tools();
+
+        tools.consultarBaseClinica(DUVIDA, 3L);
+
+        // Perguntar pelo historico ja e um acesso, mesmo que nao haja nada a devolver.
+        assertThat(auditoria.ultimos(3L, 10)).extracting(AcessoAoHistorico::trechos).containsExactly(0);
+    }
+
+    @Test
+    void consultaSemPacienteIdNaoRegistraNada() throws IOException {
+        var tools = montarComHistoricos(10).tools();
+
+        tools.consultarBaseClinica(DUVIDA, null);
+
+        assertThat(totalDeRegistros()).isZero();
+    }
+
+    @Test
+    void pedidoRecusadoNaoRegistraAcesso() throws IOException {
+        var tools = montarComHistoricos(10).tools();
+        tools.consultarBaseClinica("abc", 1L);                       // duvida curta
+        tools.consultarBaseClinica(DUVIDA, 99L);                     // paciente inexistente
+        tools.consultarBaseClinica("x".repeat(501), 1L);             // duvida longa demais
+        montar(4, 0.0).tools().consultarBaseClinica(DUVIDA, 1L);     // base ainda nao indexada
+
+        assertThat(totalDeRegistros()).isZero();
+    }
+
+    @Test
+    void semRegistroNaoHaHistorico() throws IOException {
+        var tools = montarComHistoricos(10).tools();
+        jdbc.sql("DROP TABLE acessos_ao_historico").update();   // o registro deixa de funcionar
+
+        Resultado<ConsultaClinica> r = tools.consultarBaseClinica(DUVIDA, 1L);
+
+        assertThat(r.sucesso()).isFalse();
+        assertThat(r.dados()).as("nenhum trecho, de ninguem, pode sair").isNull();
+        assertThat(r.erro()).isEqualTo(AuditoriaDeAcessos.FALHA_NO_REGISTRO);
+        // Sem pacienteId nao ha historico em jogo, entao os protocolos continuam disponiveis.
+        assertThat(tools.consultarBaseClinica(DUVIDA, null).sucesso()).isTrue();
+    }
+
+    @Test
+    void oRegistroNaoGuardaAPerguntaNemOTextoDevolvido() throws IOException {
+        var tools = montarComHistoricos(10).tools();
+
+        tools.consultarBaseClinica("alergia ao anestesico Calmaxil, historico da Maria hipertensa", 1L);
+
+        String tudoQueFoiGravado = jdbc.sql("SELECT * FROM acessos_ao_historico").query((rs, n) -> {
+            StringBuilder linha = new StringBuilder();
+            for (int i = 1; i <= rs.getMetaData().getColumnCount(); i++) {
+                linha.append(rs.getString(i)).append('|');
+            }
+            return linha.toString();
+        }).list().toString();
+        assertThat(tudoQueFoiGravado).contains("consultarBaseClinica")
+                .doesNotContain("alergia", "Calmaxil", "Maria", "hipertens", "anestesico");
+    }
+
+    @Test
+    void aFerramentaDeConsultaAvisaQueOAcessoFicaRegistrado() {
+        ToolCallback[] callbacks = MethodToolCallbackProvider.builder().toolObjects(montar(4, 0.0).tools())
+                .build().getToolCallbacks();
+
+        assertThat(callbacks[0].getToolDefinition().description()).contains("fica registrado");
     }
 
     private static Document doc(String arquivo, Map<String, Object> escopo) {

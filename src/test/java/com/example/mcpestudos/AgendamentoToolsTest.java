@@ -37,6 +37,7 @@ class AgendamentoToolsTest {
 
     JdbcClient jdbc;
     AgendamentoTools tools;
+    AuditoriaDeAcessos auditoria;
 
     @BeforeEach
     void setUp() {
@@ -46,7 +47,9 @@ class AgendamentoToolsTest {
         populator.setSqlScriptEncoding(StandardCharsets.UTF_8.name());
         populator.execute(ds);
         jdbc = JdbcClient.create(ds);
-        tools = new AgendamentoTools(jdbc, Clock.fixed(AGORA, SP), new TransactionTemplate(new DataSourceTransactionManager(ds)));
+        Clock relogio = Clock.fixed(AGORA, SP);
+        auditoria = new AuditoriaDeAcessos(jdbc, relogio);
+        tools = new AgendamentoTools(jdbc, relogio, new TransactionTemplate(new DataSourceTransactionManager(ds)), auditoria);
     }
 
     /**
@@ -292,6 +295,70 @@ class AgendamentoToolsTest {
         inserirConsulta(1, 2, "2026-10-02", "09:00", "AGENDADA");
         assertThat(tools.consultasDoPaciente(1L).dados()).isEmpty();
         assertThat(tools.consultasDoPaciente(2L).dados()).hasSize(1);
+    }
+
+    // ---------- auditoria do acesso ao historico ----------
+
+    private int totalDeRegistros() {
+        return jdbc.sql("SELECT COUNT(*) FROM acessos_ao_historico").query(Integer.class).single();
+    }
+
+    @Test
+    void consultarOHistoricoFicaRegistradoComOTotalDeConsultas() {
+        agendar(1L, 1L, TERCA, "09:00", "Canal");
+
+        tools.consultasDoPaciente(1L);
+        tools.consultasDoPaciente(1L);
+
+        assertThat(auditoria.ultimos(1L, 10)).hasSize(2).allSatisfy(acesso -> {
+            assertThat(acesso.ferramenta()).isEqualTo("consultasDoPaciente");
+            assertThat(acesso.trechos()).isEqualTo(1);
+            assertThat(acesso.acessadoEm()).isEqualTo("2026-11-09T10:30:00-03:00");
+        });
+        assertThat(auditoria.total(2L)).isZero();
+    }
+
+    @Test
+    void pacienteSemConsultasTambemRegistraOAcessoComZero() {
+        assertThat(tools.consultasDoPaciente(3L).dados()).isEmpty();
+
+        assertThat(auditoria.ultimos(3L, 10)).extracting(AcessoAoHistorico::trechos).containsExactly(0);
+    }
+
+    @Test
+    void pedidoRecusadoNaoRegistraAcesso() {
+        assertThat(tools.consultasDoPaciente(null).erro()).contains("ID do paciente");
+        Resultado<List<ConsultaResumo>> inexistente = tools.consultasDoPaciente(999L);
+
+        // Antes devolvia lista vazia, o que o modelo podia ler como "o paciente nao tem consultas".
+        assertThat(inexistente.sucesso()).isFalse();
+        assertThat(inexistente.erro()).contains("Paciente nao encontrado: 999").contains("buscarPaciente");
+        assertThat(totalDeRegistros()).isZero();
+    }
+
+    @Test
+    void semRegistroNaoHaHistorico() {
+        inserirConsulta(1, 1, "2026-10-01", "09:00", "AGENDADA");
+        jdbc.sql("DROP TABLE acessos_ao_historico").update();   // o registro deixa de funcionar
+
+        Resultado<List<ConsultaResumo>> r = tools.consultasDoPaciente(1L);
+
+        assertThat(r.sucesso()).isFalse();
+        assertThat(r.dados()).as("nenhuma consulta pode sair sem o registro do acesso").isNull();
+        assertThat(r.erro()).isEqualTo(AuditoriaDeAcessos.FALHA_NO_REGISTRO);
+    }
+
+    @Test
+    void asDemaisFerramentasNaoRegistramAcessoAoHistorico() {
+        // Identificar o paciente, listar dentistas/horarios e agendar nao leem o historico dele.
+        tools.buscarPaciente("Maria");
+        tools.listarDentistas(null);
+        tools.dataDeHoje();
+        tools.horariosLivres(1L, TERCA);
+        Resultado<AgendamentoConfirmado> confirmada = agendar(1L, 1L, TERCA, "09:00", "Canal");
+        tools.cancelarConsulta(confirmada.dados().consultaId(), "teste");
+
+        assertThat(totalDeRegistros()).isZero();
     }
 
     // ---------- IDs nulos (Long) ----------

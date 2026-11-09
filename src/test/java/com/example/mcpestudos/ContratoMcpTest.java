@@ -411,6 +411,34 @@ class ContratoMcpTest {
     }
 
     @Test
+    void oAcessoAoHistoricoFicaRegistradoELegivelPelaFerramentaDeAuditoria() {
+        CLIENTE.chamarFerramentaEObterJson("consultasDoPaciente", Map.of("pacienteId", 104));
+        CLIENTE.chamarFerramentaEObterJson("consultarBaseClinica",
+                Map.of("duvida", "alergia a penicilina do paciente", "pacienteId", 104));
+
+        Map<?, ?> resposta = (Map<?, ?>) CLIENTE.chamarFerramentaEObterJson("acessosAoHistorico",
+                Map.of("pacienteId", 104));
+
+        assertThat(resposta.get("sucesso")).isEqualTo(true);
+        Map<?, ?> dados = (Map<?, ?>) resposta.get("dados");
+        assertThat(chaves(dados)).containsExactlyInAnyOrder("pacienteId", "total", "acessos", "aviso");
+        List<Object> acessos = lista(dados.get("acessos"));
+        assertThat(chaves(acessos.get(0)))
+                .containsExactlyInAnyOrder("id", "pacienteId", "ferramenta", "acessadoEm", "trechos");
+        assertThat((String) campo(acessos.get(0), "acessadoEm")).matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}[-+]\\d{2}:\\d{2}");
+        // O nome gravado no registro e o nome PUBLICADO da ferramenta: renomear uma ferramenta sem ajustar o registro
+        // deixaria o historico de auditoria apontando para algo que nao existe mais.
+        Set<String> publicadas = new TreeSet<>();
+        CLIENTE.listarFerramentas().forEach(f -> publicadas.add((String) f.get("name")));
+        assertThat(acessos).extracting(a -> campo(a, "ferramenta"))
+                .contains("consultasDoPaciente", "consultarBaseClinica")
+                .allSatisfy(nome -> assertThat(publicadas).contains((String) nome));
+        // Nada da pergunta nem do conteudo do historico vai para o registro.
+        assertThat(resposta.toString()).doesNotContain("penicilina").doesNotContain(MARCA_DO_HISTORICO);
+        assertThat((String) dados.get("aviso")).contains("QUEM").contains("nao tem login");
+    }
+
+    @Test
     void oFluxoDeAgendamentoEmDoisPassosMantemOFormatoDasRespostas() {
         // Proximo dia util daqui a alguns dias, longe da consulta de exemplo que a aplicacao semeia no 1o dia util.
         LocalDate dia = LocalDate.now(ZoneId.of("America/Sao_Paulo")).plusDays(5);

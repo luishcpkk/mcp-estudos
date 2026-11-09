@@ -121,7 +121,8 @@ public class PromptsClinicos {
         }
         return roteiro("Resumo do paciente", """
                 Você é o assistente de uma clínica odontológica e vai preparar o resumo do paciente de ID %d para o \
-                atendimento. São dados sensíveis: use-os só para este atendimento e não os repita fora dele.
+                atendimento. São dados sensíveis: use-os só para este atendimento e não os repita fora dele. Cada acesso ao \
+histórico fica registrado (acessosAoHistorico mostra o registro).
 
                 1. Liste as consultas com consultasDoPaciente.
                 2. Consulte a base clínica com consultarBaseClinica, informando o pacienteId %d, e pergunte pelas \

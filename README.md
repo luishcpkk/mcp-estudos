@@ -66,6 +66,34 @@ do servidor (`odonto-mcp`). **Não consegui conferir isso na sua instalação**:
 Claude faz com um roteiro é decisão do modelo, que os testes não medem. Se o menu não mostrar nada, o Inspector (abas
 **Prompts** e **Resources**, ou os comandos abaixo) mostra o que o servidor publica.
 
+## Auditoria de acessos ao histórico
+
+Todo acesso ao histórico de um paciente fica registrado na tabela `acessos_ao_historico` do banco
+(`~/odonto-mcp.db`): `consultasDoPaciente` e `consultarBaseClinica` **com** `pacienteId`. A ferramenta `acessosAoHistorico`
+(`pacienteId`, `limite` opcional) lista os acessos mais recentes de um paciente, e o assistente consegue responder
+"quando o histórico do Carlos foi consultado?".
+
+| Guarda | Não guarda |
+|---|---|
+| paciente, ferramenta, instante (com o fuso: `2026-11-09T10:30:00-03:00`) e quantos itens voltaram | **a pergunta** (pode conter dado de saúde), o texto devolvido e **quem** acessou |
+
+- **Falha fechada.** O histórico só é devolvido depois de o registro ser gravado. Se a gravação falhar, a ferramenta responde
+  que não pôde registrar e **não devolve nada**: não existe acesso ao histórico sem rastro. Sem `pacienteId` (só protocolos),
+  nada é registrado e a ferramenta segue funcionando.
+- **Só de acréscimo.** Gatilhos do SQLite recusam `UPDATE` e `DELETE` na tabela (`InicializacaoBanco` os cria na partida).
+  Isso protege contra bug e engano, **não** contra quem tem o arquivo do banco e pode remover o gatilho.
+- **Não diz *quem*.** O servidor roda no computador de um único usuário, sem login, então não há identidade para gravar.
+  O resultado de `acessosAoHistorico` avisa o modelo disso para ele não afirmar quem foi. Num serviço com vários usuários,
+  a identidade viria da autenticação do transporte (HTTP com OAuth).
+- Ler o registro (`acessosAoHistorico`) não é registrado; `buscarPaciente` (identificar o paciente pelo nome) também não.
+- Bancos criados por versões anteriores ganham a tabela na partida seguinte. O registro cresce sem limite: política de
+  retenção não faz parte deste projeto.
+
+Para conferir direto no banco: `sqlite3 ~/odonto-mcp.db "SELECT * FROM acessos_ao_historico ORDER BY id DESC LIMIT 10"`.
+
+> `consultasDoPaciente` com um ID que não existe agora responde "Paciente não encontrado" (antes devolvia uma lista vazia, que
+> o modelo podia ler como "o paciente não tem consultas").
+
 ## Depurar com o MCP Inspector (sem gerar o `.jar`)
 
 O [MCP Inspector](https://github.com/modelcontextprotocol/inspector) conecta no servidor, lista as ferramentas e deixa
@@ -134,6 +162,7 @@ mvn test
 | Teste | O que garante | Precisa de Ollama? |
 |---|---|---|
 | `ContratoMcpTest` | O que o Claude enxerga do servidor (nome, instruções, ferramentas, prompts, resources, parâmetros, formato das respostas) não muda sem aviso, e os textos não citam ferramenta que não existe mais | não |
+| `AuditoriaDeAcessosTest`, `AuditoriaToolsTest` | O registro guarda só o fato, a leitura respeita limites e os gatilhos impedem alterar o que foi gravado | não |
 | `PromptsClinicosTest`, `RecursosClinicosTest` | As regras que os roteiros carregam (alarme antes de agendar, confirmar só depois do "sim"), a validação dos argumentos e os endereços dos resources | não |
 | `AvaliacaoRagMecanicaTest` | O conjunto de perguntas é coerente com os PDFs, a regra de escopo entre pacientes não vaza e as métricas estão certas | não |
 | `AvaliacaoRagOllamaTest` | Mede a qualidade da recuperação **com o modelo real** | sim (senão é pulado) |

@@ -17,6 +17,9 @@ import org.springframework.stereotype.Component;
  *       que ja existe, e o SQLite nao tem {@code ADD COLUMN IF NOT EXISTS}.</li>
  *   <li>Cria a consulta de exemplo com datas calculadas pelo {@link Clock} (fuso da clinica), em vez de
  *       {@code date('now')} do SQLite, que e UTC.</li>
+ *   <li>Torna o registro de acessos ao historico (tabela {@code acessos_ao_historico}) somente de acrescimo, com
+ *       gatilhos que recusam UPDATE e DELETE. Gatilho tem {@code ;} dentro de {@code BEGIN...END}, e o leitor de
+ *       script do Spring corta o comando ali; por isso nao pode ficar em schema.sql.</li>
  * </ul>
  */
 @Component
@@ -34,7 +37,18 @@ class InicializacaoBanco implements ApplicationRunner {
     public void run(ApplicationArguments args) {
         adicionarColunaSeAusente("motivo_cancelamento");
         adicionarColunaSeAusente("cancelada_em");
+        protegerRegistroDeAcessos();
         semearConsultaDeExemplo();
+    }
+
+    /** O registro de acessos so recebe INSERT: corrigir ou apagar uma linha esconderia um acesso. */
+    private void protegerRegistroDeAcessos() {
+        for (String operacao : List.of("UPDATE", "DELETE")) {
+            // 'operacao' vem de uma lista fixa deste metodo, nunca de entrada externa.
+            jdbc.sql("CREATE TRIGGER IF NOT EXISTS trg_acessos_ao_historico_sem_" + operacao.toLowerCase()
+                    + " BEFORE " + operacao + " ON acessos_ao_historico BEGIN "
+                    + "SELECT RAISE(ABORT, 'acessos_ao_historico e somente de acrescimo'); END").update();
+        }
     }
 
     private void adicionarColunaSeAusente(String coluna) {

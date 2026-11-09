@@ -24,6 +24,10 @@ se não se sabe de quem é um documento, o seguro é não oferecê-lo a nenhuma 
 > `pacienteId` é o modelo, a pedido do usuário. Evita o vazamento acidental entre pacientes numa pergunta
 > genérica; não impede que alguém peça de propósito o histórico de outro paciente.
 
+Por isso todo acesso ao histórico de um paciente fica **registrado** (quando, por qual ferramenta, quantos trechos; nunca a
+pergunta nem o texto). Quem pediu o histórico de outro paciente de propósito deixa rastro: veja a seção
+*Auditoria de acessos ao histórico* do [README do projeto](../../../../README.md) e a ferramenta `acessosAoHistorico`.
+
 ## Outras regras
 
 - Só PDFs com **texto selecionável** são indexados; PDFs escaneados (apenas imagem) são ignorados.

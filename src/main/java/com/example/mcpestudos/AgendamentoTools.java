@@ -58,6 +58,9 @@ public class AgendamentoTools {
     private static final String INFORME_DENTISTA = "Informe o ID do dentista (veja listarDentistas).";
     private static final String INFORME_PACIENTE = "Informe o ID do paciente (veja buscarPaciente).";
 
+    /** Nome desta ferramenta no registro de acessos (tem de ser o nome publicado; o teste de contrato confere). */
+    static final String FERRAMENTA_CONSULTAS = "consultasDoPaciente";
+
     /** Quanto tempo o codigo de confirmacao vale (entra tambem na descricao das ferramentas). */
     static final int VALIDADE_EM_MINUTOS = 10;
     static final int TAMANHO_DO_CODIGO = 8;
@@ -78,11 +81,14 @@ public class AgendamentoTools {
     private final JdbcClient jdbc;
     private final Clock clock;
     private final TransactionTemplate transacao;
+    private final AuditoriaDeAcessos auditoria;
 
-    public AgendamentoTools(JdbcClient jdbc, Clock clock, TransactionTemplate transacao) {
+    public AgendamentoTools(JdbcClient jdbc, Clock clock, TransactionTemplate transacao,
+                            AuditoriaDeAcessos auditoria) {
         this.jdbc = jdbc;
         this.clock = clock;
         this.transacao = transacao;
+        this.auditoria = auditoria;
     }
 
     @Tool(description = "Retorna a data de hoje e o dia da semana. Use sempre que o usuario "
@@ -278,11 +284,14 @@ public class AgendamentoTools {
 
     @Tool(description = "Lista as consultas de um paciente, em ordem de data, incluindo o historico. "
             + "O status e AGENDADA para consultas futuras e REALIZADA para as que ja passaram. "
-            + "Consultas canceladas nao aparecem.")
+            + "Consultas canceladas nao aparecem. O acesso ao historico do paciente fica registrado.")
     public Resultado<List<ConsultaResumo>> consultasDoPaciente(
             @ToolParam(description = "ID do paciente, obtido em buscarPaciente") Long pacienteId) {
         if (pacienteId == null) {
             return Resultado.falha(INFORME_PACIENTE);
+        }
+        if (nomeDoPaciente(pacienteId).isEmpty()) {
+            return Resultado.falha("Paciente nao encontrado: " + pacienteId + ". Use buscarPaciente para achar o ID.");
         }
         List<ConsultaResumo> consultas = jdbc.sql("SELECT c.id, c.data, c.hora, c.procedimento, "
                         + "d.nome AS dentista "
@@ -297,6 +306,10 @@ public class AgendamentoTools {
                             rs.getString("dentista"), statusExibido(data, hora));
                 })
                 .list();
+        // Falha fechada: a lista so sai depois de o acesso ficar registrado.
+        if (!auditoria.registrar(pacienteId, FERRAMENTA_CONSULTAS, consultas.size())) {
+            return Resultado.falha(AuditoriaDeAcessos.FALHA_NO_REGISTRO);
+        }
         return Resultado.ok(consultas);
     }
 
