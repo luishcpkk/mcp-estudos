@@ -1,6 +1,7 @@
 package com.example.mcpestudos;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -221,5 +222,82 @@ class DocumentIngestionServiceTest {
 
         assertThat(segunda).isEqualTo(primeira);
         assertThat(buscar("protocolo", 100)).hasSize(antes);
+    }
+
+    // ---------- indice de protocolos (alimenta o resource clinica://protocolos) ----------
+
+    @Test
+    void oIndiceDeProtocolosGuardaSoProtocolosEmOrdemComAPaginaDeCadaTrecho() throws IOException {
+        PdfsDeTeste.criar(dir.resolve("protocolo-geral.pdf"), ZORVEX, CANAL);
+        PdfsDeTeste.criar(dir.resolve("protocolo-gestantes.pdf"), CLAREAMENTO);
+        PdfsDeTeste.criar(dir.resolve("paciente-1-historico.pdf"), "Historico da paciente Maria: SEGREDO-DA-MARIA alergia a penicilina.");
+        PdfsDeTeste.criar(dir.resolve("historico_maria.pdf"), "Prontuario confidencial SEGREDO sem identificacao.");
+        DocumentIngestionService servico = servico(500);
+
+        servico.ingerirDocumentos();
+
+        Map<String, List<DocumentIngestionService.TrechoDeProtocolo>> indice = servico.getProtocolosIndexados();
+        assertThat(indice.keySet()).containsExactly("protocolo-geral.pdf", "protocolo-gestantes.pdf");
+        assertThat(indice.get("protocolo-geral.pdf")).extracting(DocumentIngestionService.TrechoDeProtocolo::pagina)
+                .containsExactly(1, 2);
+        assertThat(indice.get("protocolo-geral.pdf").get(0).texto()).contains("Zorvex");
+        assertThat(indice.get("protocolo-geral.pdf").get(1).texto()).contains("periapical");
+        // Historico de paciente e arquivo fora do padrao nunca entram: o resource so le o que esta aqui.
+        assertThat(indice.toString()).doesNotContain("Maria").doesNotContain("SEGREDO").doesNotContain("penicilina");
+    }
+
+    @Test
+    void oIndiceDeProtocolosTemTodosOsTrechosDeUmProtocoloLongoNaOrdemDoTexto() throws IOException {
+        StringBuilder longo = new StringBuilder();
+        for (int i = 0; i < 40; i++) {
+            longo.append("Frase ").append(i).append(" sobre higiene bucal e escovacao diaria com fio dental. ");
+        }
+        PdfsDeTeste.criar(dir.resolve("protocolo-longo.pdf"), longo.toString());
+        DocumentIngestionService servico = servico(100);
+
+        StatusIndexacao status = servico.ingerirDocumentos();
+
+        List<DocumentIngestionService.TrechoDeProtocolo> trechos = servico.getProtocolosIndexados().get("protocolo-longo.pdf");
+        assertThat(trechos).hasSize(status.trechos()).hasSizeGreaterThan(1);
+        String junto = String.join(" ", trechos.stream().map(DocumentIngestionService.TrechoDeProtocolo::texto).toList());
+        assertThat(junto.indexOf("Frase 0 ")).isLessThan(junto.indexOf("Frase 20 "));
+        assertThat(junto.indexOf("Frase 20 ")).isLessThan(junto.indexOf("Frase 39 "));
+    }
+
+    @Test
+    void oIndiceDeProtocolosComecaVazioEContinuaVazioSemProtocolosIndexaveis() throws IOException {
+        DocumentIngestionService servico = servico(500);
+        assertThat(servico.getProtocolosIndexados()).isEmpty();
+
+        PdfsDeTeste.criar(dir.resolve("paciente-1-historico.pdf"), "Historico da paciente Maria: alergia ao Calmaxil.");
+        PdfsDeTeste.criarEmBranco(dir.resolve("protocolo-escaneado.pdf"));
+        servico.ingerirDocumentos();
+
+        assertThat(servico.getProtocolosIndexados()).isEmpty();   // historico nao conta; PDF sem texto nao foi indexado
+    }
+
+    @Test
+    void protocoloQueFalhouNaIndexacaoNaoApareceNoIndice() throws IOException {
+        PdfsDeTeste.criar(dir.resolve("protocolo-geral.pdf"), ZORVEX);
+        embedding.foraDoAr = true;
+        DocumentIngestionService servico = servico(500);
+
+        servico.ingerirDocumentos();
+
+        assertThat(servico.getProtocolosIndexados()).isEmpty();
+    }
+
+    @Test
+    void oIndiceDeProtocolosAposIngestaoNaoMudaNemPodeSerAlteradoPorFora() throws IOException {
+        PdfsDeTeste.criar(dir.resolve("protocolo-geral.pdf"), ZORVEX);
+        DocumentIngestionService servico = servico(500);
+        servico.ingerirDocumentos();
+        Map<String, List<DocumentIngestionService.TrechoDeProtocolo>> indice = servico.getProtocolosIndexados();
+
+        servico.ingerirDocumentos();   // roda uma so vez: nao reindexa nem troca o instantaneo
+
+        assertThat(servico.getProtocolosIndexados()).isSameAs(indice);
+        assertThatThrownBy(() -> indice.put("protocolo-x.pdf", List.of()))
+                .isInstanceOf(UnsupportedOperationException.class);
     }
 }

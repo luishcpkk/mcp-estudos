@@ -1,10 +1,13 @@
 package com.example.mcpestudos;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -56,11 +59,19 @@ public class DocumentIngestionService implements ApplicationRunner {
     record Classificacao(String escopo, Long pacienteId) {
     }
 
+    /**
+     * Um trecho de protocolo ja indexado. So protocolos entram aqui (nunca historico de paciente): este e o conteudo
+     * do resource {@code clinica://protocolos/{arquivo}}.
+     */
+    record TrechoDeProtocolo(Integer pagina, String texto) {
+    }
+
     private final VectorStore vectorStore;
     private final ResourcePatternResolver resolver;
     private final RagProperties props;
     private final TokenTextSplitter splitter;
     private final AtomicReference<StatusIndexacao> status = new AtomicReference<>(StatusIndexacao.naoIniciada());
+    private final AtomicReference<Map<String, List<TrechoDeProtocolo>>> protocolos = new AtomicReference<>(Map.of());
 
     public DocumentIngestionService(VectorStore vectorStore, ResourcePatternResolver resolver,
                                     RagProperties props) {
@@ -78,6 +89,14 @@ public class DocumentIngestionService implements ApplicationRunner {
 
     public StatusIndexacao getStatus() {
         return status.get();
+    }
+
+    /**
+     * Os protocolos indexados (arquivo -> trechos, em ordem), de um instantaneo publicado ao fim da indexacao.
+     * Vazio enquanto a indexacao nao termina. Historicos de paciente nunca aparecem aqui.
+     */
+    public Map<String, List<TrechoDeProtocolo>> getProtocolosIndexados() {
+        return protocolos.get();
     }
 
     /**
@@ -104,6 +123,7 @@ public class DocumentIngestionService implements ApplicationRunner {
         int semTexto = 0;
         int naoClassificados = 0;
         int trechos = 0;
+        Map<String, List<TrechoDeProtocolo>> protocolosIndexados = new TreeMap<>();
         for (Resource pdf : pdfs) {
             Optional<Classificacao> classificacao = classificar(pdf.getFilename());
             if (classificacao.isEmpty()) {
@@ -113,10 +133,14 @@ public class DocumentIngestionService implements ApplicationRunner {
                 continue;
             }
             try {
-                int gravados = indexar(pdf, classificacao.get());
+                List<Document> gravados = indexar(pdf, classificacao.get());
                 arquivos++;
-                trechos += gravados;
-                if (gravados == 0) {
+                trechos += gravados.size();
+                if (!gravados.isEmpty() && ESCOPO_PROTOCOLO.equals(classificacao.get().escopo())) {
+                    protocolosIndexados.put(pdf.getFilename(), gravados.stream()
+                            .map(d -> new TrechoDeProtocolo(paginaDe(d), d.getText())).toList());
+                }
+                if (gravados.isEmpty()) {
                     semTexto++;
                     log.warn("{} nao tem texto extraivel (PDF escaneado?) e nao foi indexado", pdf.getFilename());
                 }
@@ -126,6 +150,8 @@ public class DocumentIngestionService implements ApplicationRunner {
                 log.warn("Falha ao indexar {}: {}", pdf.getFilename(), e.toString());
             }
         }
+        // Publica o indice de protocolos ANTES do estado final: quem ve PRONTA ja ve os protocolos.
+        protocolos.set(Collections.unmodifiableMap(new TreeMap<>(protocolosIndexados)));
         StatusIndexacao.Estado estado = arquivos == 0 && falhas > 0
                 ? StatusIndexacao.Estado.FALHOU : StatusIndexacao.Estado.PRONTA;
         status.set(new StatusIndexacao(estado, arquivos, falhas, semTexto, naoClassificados, trechos));
@@ -169,8 +195,13 @@ public class DocumentIngestionService implements ApplicationRunner {
         return Optional.empty();
     }
 
-    /** @return quantos trechos foram gravados para o PDF */
-    private int indexar(Resource pdf, Classificacao classificacao) {
+    private static Integer paginaDe(Document trecho) {
+        Object pagina = trecho.getMetadata().get(PagePdfDocumentReader.METADATA_START_PAGE_NUMBER);
+        return pagina instanceof Number n ? n.intValue() : null;
+    }
+
+    /** @return os trechos gravados para o PDF, em ordem (vazio se o PDF nao tem texto extraivel) */
+    private List<Document> indexar(Resource pdf, Classificacao classificacao) {
         PdfDocumentReaderConfig config = PdfDocumentReaderConfig.builder().withPagesPerDocument(1).build();
         List<Document> paginas = new PagePdfDocumentReader(pdf, config).get().stream()
                 .map(p -> new Document(normalizarEspacos(p.getText()), comEscopo(p.getMetadata(), classificacao)))
@@ -181,6 +212,6 @@ public class DocumentIngestionService implements ApplicationRunner {
         if (!trechos.isEmpty()) {
             vectorStore.add(trechos);
         }
-        return trechos.size();
+        return trechos;
     }
 }

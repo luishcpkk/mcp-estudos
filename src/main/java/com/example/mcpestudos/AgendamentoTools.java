@@ -430,6 +430,11 @@ public class AgendamentoTools {
         return codigo.toString();
     }
 
+    /** Horarios de atendimento no formato HH:mm: fonte unica, usada tambem pelo resource de regras. */
+    static List<String> horariosDeAtendimento() {
+        return HORARIOS.stream().map(HORA_FMT::format).toList();
+    }
+
     private static String nomeDoDia(LocalDate dia) {
         return dia.getDayOfWeek().getDisplayName(TextStyle.FULL, Locale.forLanguageTag("pt-BR"));
     }
