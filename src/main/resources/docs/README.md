@@ -13,6 +13,9 @@ alterar arquivos: o índice fica em memória.
 
 Exemplos: `protocolo-anestesia.pdf`, `paciente-12-historico.pdf`.
 
+O `<id>` precisa existir na tabela `pacientes`, senão `consultarBaseClinica` recusa a consulta. O paciente de exemplo
+**104 (Carlos Almeida, fictício)** já vem no `data.sql`, para o histórico `paciente-104-*.pdf` funcionar de imediato.
+
 Sem o `pacienteId`, `consultarBaseClinica` só consulta protocolos. Com ele, consulta protocolos **e** os
 documentos daquele paciente, nunca os de outro. Um arquivo com nome fora do padrão é ignorado de propósito:
 se não se sabe de quem é um documento, o seguro é não oferecê-lo a nenhuma busca.

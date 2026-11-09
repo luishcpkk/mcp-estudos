@@ -73,7 +73,8 @@ class AvaliacaoRagOllamaTest {
 
     @Test
     void avaliaARecuperacaoComOModeloAtual() {
-        jdbc.sql("INSERT OR IGNORE INTO pacientes (id, nome, telefone) VALUES (104, 'Carlos Almeida', '(31) 90000-0104')").update();
+        assertThat(jdbc.sql("SELECT nome FROM pacientes WHERE id = 104").query(String.class).optional())
+                .as("o paciente 104 vem do data.sql").contains("Carlos Almeida");
 
         StatusIndexacao status = ingestao.getStatus();
         assertThat(status.estado())

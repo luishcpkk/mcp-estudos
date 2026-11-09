@@ -64,7 +64,8 @@ class AvaliacaoRagMecanicaTest {
         populator.setSqlScriptEncoding(StandardCharsets.UTF_8.name());
         populator.execute(ds);
         JdbcClient jdbc = JdbcClient.create(ds);
-        jdbc.sql("INSERT INTO pacientes (id, nome, telefone) VALUES (104, 'Carlos Almeida', '(31) 90000-0104')").update();
+        assertThat(jdbc.sql("SELECT nome FROM pacientes WHERE id = 104").query(String.class).optional())
+                .as("o paciente 104 vem do data.sql").contains("Carlos Almeida");
 
         var props = new RagProperties(DOCS, 500, 8, 0.0);
         var ingestao = new DocumentIngestionService(store, resolver, props);
