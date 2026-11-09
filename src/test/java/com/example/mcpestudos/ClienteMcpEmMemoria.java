@@ -79,6 +79,37 @@ final class ClienteMcpEmMemoria {
         return brutas.stream().map(ClienteMcpEmMemoria::mapa).toList();
     }
 
+    /** Os prompts publicados pelo servidor ({@code prompts/list}). */
+    List<Map<String, Object>> listarPrompts() {
+        return listar("prompts/list", "prompts");
+    }
+
+    /** {@code prompts/get}: devolve a mensagem inteira, para o teste ver tanto o {@code result} quanto o {@code error}. */
+    Map<String, Object> obterPrompt(String nome, Map<String, Object> argumentos) {
+        return requisitar("prompts/get", Map.of("name", nome, "arguments", argumentos));
+    }
+
+    /** Os resources fixos publicados pelo servidor ({@code resources/list}). */
+    List<Map<String, Object>> listarRecursos() {
+        return listar("resources/list", "resources");
+    }
+
+    /** Os modelos de resource ({@code resources/templates/list}), como {@code clinica://protocolos/{arquivo}}. */
+    List<Map<String, Object>> listarModelosDeRecurso() {
+        return listar("resources/templates/list", "resourceTemplates");
+    }
+
+    /** {@code resources/read}: devolve a mensagem inteira ({@code result.contents} ou {@code error}). */
+    Map<String, Object> lerRecurso(String uri) {
+        return requisitar("resources/read", Map.of("uri", uri));
+    }
+
+    private List<Map<String, Object>> listar(String metodo, String chave) {
+        Map<String, Object> resposta = requisitar(metodo, Map.of());
+        List<?> brutos = (List<?>) mapa(resposta.get("result")).get(chave);
+        return brutos.stream().map(ClienteMcpEmMemoria::mapa).toList();
+    }
+
     void encerrar() {
         entrada.encerrar();
     }

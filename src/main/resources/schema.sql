@@ -45,3 +45,18 @@ CREATE TABLE IF NOT EXISTS propostas_agendamento (
     status       TEXT NOT NULL DEFAULT 'PENDENTE',
     consulta_id  INTEGER REFERENCES consultas(id)
 );
+
+-- Auditoria de acessos ao historico de um paciente (consultasDoPaciente e consultarBaseClinica com pacienteId).
+-- Guarda so o FATO: qual paciente, qual ferramenta, quando e quantos itens foram devolvidos. Nunca guarda a pergunta
+-- nem o texto devolvido, que seriam dados de saude copiados para um segundo lugar.
+-- O registro e so de acrescimo: os gatilhos que recusam UPDATE e DELETE sao criados por InicializacaoBanco (o leitor de
+-- script do Spring corta o comando no ';' de dentro de BEGIN...END, entao gatilho nao cabe aqui).
+CREATE TABLE IF NOT EXISTS acessos_ao_historico (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    paciente_id INTEGER NOT NULL REFERENCES pacientes(id),
+    ferramenta  TEXT NOT NULL,
+    acessado_em TEXT NOT NULL,
+    trechos     INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS ix_acessos_ao_historico_paciente ON acessos_ao_historico (paciente_id, id);

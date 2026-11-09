@@ -73,7 +73,8 @@ class AvaliacaoRagMecanicaTest {
         assertThat(status.estado()).isEqualTo(StatusIndexacao.Estado.PRONTA);
         assertThat(status.arquivos()).as("PDFs de avaliacao indexados").isEqualTo(2);
         assertThat(status.arquivosNaoClassificados()).isZero();
-        tools = new ConsultorClinicoTools(store, ingestao, props, jdbc);
+        tools = new ConsultorClinicoTools(store, ingestao, props, jdbc,
+                new AuditoriaDeAcessos(jdbc, java.time.Clock.systemDefaultZone()));
     }
 
     // ---------- o conjunto de perguntas ----------
