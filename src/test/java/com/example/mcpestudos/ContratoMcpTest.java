@@ -8,6 +8,9 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -90,7 +93,9 @@ class ContratoMcpTest {
                 .as("instrucoes do servidor (orientam o modelo antes de qualquer chamada)")
                 .contains("consultarBaseClinica")
                 .contains("pacienteId")
-                .contains("confirme com o usuario");
+                .contains("prepararAgendamento")
+                .contains("confirmarAgendamento")
+                .contains("explicita");   // so confirmar depois de o usuario confirmar de forma explicita
         assertThat(ClienteMcpEmMemoria.mapa(inicializacao.get("capabilities"))).containsKey("tools");
     }
 
@@ -134,7 +139,9 @@ class ContratoMcpTest {
         Map<String, String> descricoes = new LinkedHashMap<>();
         CLIENTE.listarFerramentas().forEach(f -> descricoes.put((String) f.get("name"), (String) f.get("description")));
 
-        assertThat(descricoes.get("agendarConsulta")).contains("confirmar");           // nao agendar sem confirmar
+        assertThat(descricoes.get("prepararAgendamento")).contains("SEM grava-lo")     // preparar nao agenda
+                .contains("confirmacao explicita");                                    // e pede o sim do usuario
+        assertThat(descricoes.get("confirmarAgendamento")).contains("confirmar explicitamente"); // so depois do sim
         assertThat(descricoes.get("cancelarConsulta")).contains("futuras");            // so cancela consulta futura
         assertThat(descricoes.get("consultarBaseClinica"))
                 .contains("ANTES de agendar")                                          // consultar protocolo antes
@@ -173,6 +180,33 @@ class ContratoMcpTest {
         Map<?, ?> duvidaCurta = (Map<?, ?>) CLIENTE.chamarFerramentaEObterJson("consultarBaseClinica", Map.of("duvida", "abc"));
         assertThat(duvidaCurta.get("sucesso")).isEqualTo(false);
         assertThat((String) duvidaCurta.get("erro")).contains("5 caracteres");
+    }
+
+    @Test
+    void oFluxoDeAgendamentoEmDoisPassosMantemOFormatoDasRespostas() {
+        // Proximo dia util daqui a alguns dias, longe da consulta de exemplo que a aplicacao semeia no 1o dia util.
+        LocalDate dia = LocalDate.now(ZoneId.of("America/Sao_Paulo")).plusDays(5);
+        while (dia.getDayOfWeek() == DayOfWeek.SATURDAY || dia.getDayOfWeek() == DayOfWeek.SUNDAY) {
+            dia = dia.plusDays(1);
+        }
+
+        Map<?, ?> proposta = (Map<?, ?>) CLIENTE.chamarFerramentaEObterJson("prepararAgendamento",
+                Map.of("dentistaId", 2, "pacienteId", 2, "data", dia.toString(), "hora", "08:00", "procedimento", "Avaliacao"));
+        assertThat(proposta.get("sucesso")).isEqualTo(true);
+        Map<?, ?> dados = (Map<?, ?>) proposta.get("dados");
+        assertThat(chaves(dados)).containsExactlyInAnyOrder("codigoConfirmacao", "resumo", "dentista", "paciente", "data",
+                "diaDaSemana", "hora", "procedimento", "expiraEm", "validadeEmMinutos", "proximoPasso");
+        assertThat((String) dados.get("codigoConfirmacao")).matches("[2-9A-HJ-NP-Z]{8}");
+
+        Map<?, ?> confirmada = (Map<?, ?>) CLIENTE.chamarFerramentaEObterJson("confirmarAgendamento",
+                Map.of("codigoConfirmacao", dados.get("codigoConfirmacao")));
+        assertThat(confirmada.get("sucesso")).isEqualTo(true);
+        assertThat(chaves(confirmada.get("dados"))).containsExactlyInAnyOrder("consultaId", "data", "hora", "procedimento");
+
+        Map<?, ?> repetida = (Map<?, ?>) CLIENTE.chamarFerramentaEObterJson("confirmarAgendamento",
+                Map.of("codigoConfirmacao", dados.get("codigoConfirmacao")));
+        assertThat(repetida.get("sucesso")).isEqualTo(false);
+        assertThat((String) repetida.get("erro")).contains("ja foi usado");
     }
 
     @Test

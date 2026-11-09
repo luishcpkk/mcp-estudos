@@ -1,5 +1,6 @@
 package com.example.mcpestudos;
 
+import java.security.SecureRandom;
 import java.sql.SQLException;
 import java.time.Clock;
 import java.time.DayOfWeek;
@@ -9,9 +10,11 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.time.format.TextStyle;
+import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -19,6 +22,8 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.UncategorizedSQLException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Ferramentas MCP de agendamento.
@@ -26,6 +31,12 @@ import org.springframework.stereotype.Service;
  * <p>Contrato de erro: pedidos recusados por regra de negocio (data invalida, horario ocupado, nome
  * curto demais...) voltam como {@link Resultado#falha(String)}, com texto para o usuario final. Falhas
  * tecnicas (banco indisponivel, bug) nao sao capturadas aqui e propagam como excecao.
+ *
+ * <p><b>Agendar e feito em dois passos.</b> {@link #prepararAgendamento} valida tudo e devolve um resumo e um
+ * codigo, sem gravar nada; {@link #confirmarAgendamento} so efetiva com esse codigo. O codigo vale uma vez, expira
+ * e e revalidado na confirmacao. Isso torna a confirmacao uma chamada separada, explicita e auditavel. NAO prova
+ * que o usuario disse "sim": o modelo poderia encadear as duas chamadas, e as instrucoes do servidor e as
+ * descricoes das ferramentas pedem que nao o faca.
  */
 @Service
 public class AgendamentoTools {
@@ -47,23 +58,38 @@ public class AgendamentoTools {
     private static final String INFORME_DENTISTA = "Informe o ID do dentista (veja listarDentistas).";
     private static final String INFORME_PACIENTE = "Informe o ID do paciente (veja buscarPaciente).";
 
+    /** Quanto tempo o codigo de confirmacao vale (entra tambem na descricao das ferramentas). */
+    static final int VALIDADE_EM_MINUTOS = 10;
+    static final int TAMANHO_DO_CODIGO = 8;
+    /** Sem 0/O e 1/I, que se confundem ao copiar o codigo. */
+    private static final String ALFABETO_DO_CODIGO = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+    private static final SecureRandom ALEATORIO = new SecureRandom();
+
+    private static final String PENDENTE = "PENDENTE";
+    private static final String CONFIRMADA = "CONFIRMADA";
+
+    private static final String PROXIMO_PASSO = "Mostre este resumo ao usuario e peca confirmacao explicita. "
+            + "So depois do sim, chame confirmarAgendamento com o codigoConfirmacao. Se o usuario quiser mudar "
+            + "algo, chame prepararAgendamento de novo.";
+
     private static final String HORARIO_OCUPADO =
             "Esse horario ja esta ocupado. Consulte horariosLivres.";
 
     private final JdbcClient jdbc;
     private final Clock clock;
+    private final TransactionTemplate transacao;
 
-    public AgendamentoTools(JdbcClient jdbc, Clock clock) {
+    public AgendamentoTools(JdbcClient jdbc, Clock clock, TransactionTemplate transacao) {
         this.jdbc = jdbc;
         this.clock = clock;
+        this.transacao = transacao;
     }
 
     @Tool(description = "Retorna a data de hoje e o dia da semana. Use sempre que o usuario "
             + "falar em datas relativas como 'amanha', 'segunda' ou 'semana que vem'.")
     public DataAtual dataDeHoje() {
         LocalDate hoje = LocalDate.now(clock);
-        String dia = hoje.getDayOfWeek().getDisplayName(TextStyle.FULL, Locale.forLanguageTag("pt-BR"));
-        return new DataAtual(hoje.toString(), dia);
+        return new DataAtual(hoje.toString(), nomeDoDia(hoje));
     }
 
     @Tool(description = "Lista os dentistas da clinica com id, nome e especialidade. "
@@ -138,69 +164,70 @@ public class AgendamentoTools {
         return Resultado.ok(new HorariosLivres(dentistaId, dia.toString(), livres));
     }
 
-    @Tool(description = "Agenda uma consulta. Recusa horario ocupado, data passada e fim de semana. "
-            + "So chame depois de confirmar paciente, dentista, data e horario com o usuario.")
-    public Resultado<AgendamentoConfirmado> agendarConsulta(
+    @Tool(description = "Prepara um agendamento SEM grava-lo: valida paciente, dentista, data, horario e "
+            + "disponibilidade e devolve um resumo e um codigoConfirmacao (valido por " + VALIDADE_EM_MINUTOS
+            + " minutos). Nada e agendado ate confirmarAgendamento. Recusa horario ocupado, data passada e fim de "
+            + "semana. Mostre o resumo ao usuario e peca confirmacao explicita antes de confirmar.")
+    public Resultado<PropostaAgendamento> prepararAgendamento(
             @ToolParam(description = "ID do dentista, obtido em listarDentistas") Long dentistaId,
             @ToolParam(description = "ID do paciente, obtido em buscarPaciente") Long pacienteId,
             @ToolParam(description = "Data no formato AAAA-MM-DD") String data,
             @ToolParam(description = "Horario no formato HH:mm, ex: 09:00. Deve ser um horario cheio.") String hora,
             @ToolParam(description = "Procedimento, ex: Limpeza, Avaliacao, Canal") String procedimento) {
-        if (dentistaId == null) {
-            return Resultado.falha(INFORME_DENTISTA);
+        Resultado<AgendamentoValidado> validacao = validarAgendamento(dentistaId, pacienteId, data, hora, procedimento);
+        if (!validacao.sucesso()) {
+            return Resultado.falha(validacao.erro());
         }
-        if (pacienteId == null) {
-            return Resultado.falha(INFORME_PACIENTE);
-        }
-        LocalDate dia = parseData(data);
-        if (dia == null) {
-            return Resultado.falha("Data invalida. Use o formato AAAA-MM-DD.");
-        }
-        LocalTime horario = parseHora(hora);
-        if (horario == null) {
-            return Resultado.falha("Horario invalido. Horarios possiveis: "
-                    + HORARIOS.stream().map(HORA_FMT::format).toList());
-        }
-        String erroDia = validarDia(dia);
-        if (erroDia != null) {
-            return Resultado.falha(erroDia);
-        }
-        if (jaPassou(dia, horario)) {
-            return Resultado.falha("Esse horario de hoje ja passou.");
-        }
-        if (!dentistaExiste(dentistaId)) {
-            return Resultado.falha("Dentista nao encontrado: " + dentistaId);
-        }
-        if (!pacienteExiste(pacienteId)) {
-            return Resultado.falha("Paciente nao encontrado: " + pacienteId);
-        }
-        if (procedimento == null || procedimento.isBlank()) {
-            return Resultado.falha("Informe o procedimento.");
-        }
-        String procedimentoOk = procedimento.trim();
-        String horaOk = HORA_FMT.format(horario);
-
-        // O indice ux_consulta_ativa e a fonte da verdade contra dupla marcacao: nao ha checagem
-        // previa (que teria janela de corrida), so o INSERT. Apenas a violacao UNIQUE vira recusa
-        // de negocio; qualquer outra falha de banco propaga como erro tecnico.
-        try {
-            Long id = jdbc.sql("INSERT INTO consultas (dentista_id, paciente_id, data, hora, procedimento) "
-                            + "VALUES (:d, :p, :data, :hora, :proc) RETURNING id")
-                    .param("d", dentistaId).param("p", pacienteId)
-                    .param("data", dia.toString()).param("hora", horaOk)
-                    .param("proc", procedimentoOk)
-                    .query(Long.class).single();
-            return Resultado.ok(new AgendamentoConfirmado(id, dia.toString(), horaOk, procedimentoOk));
-        } catch (DuplicateKeyException e) {
+        AgendamentoValidado v = validacao.dados();
+        // Checagem so para nao mostrar ao usuario um resumo de horario que ja esta ocupado. Quem garante de
+        // verdade contra dupla marcacao e o indice ux_consulta_ativa, na confirmacao.
+        if (horarioOcupado(v)) {
             return Resultado.falha(HORARIO_OCUPADO);
-        } catch (UncategorizedSQLException e) {
-            // O driver do SQLite nao informa SQLState, entao o Spring nao chega a traduzir para
-            // DuplicateKeyException: a violacao UNIQUE e reconhecida pelo codigo e pela mensagem.
-            if (violacaoUnique(e)) {
-                return Resultado.falha(HORARIO_OCUPADO);
-            }
-            throw e;
         }
+        LocalDateTime agora = LocalDateTime.now(clock).truncatedTo(ChronoUnit.SECONDS);
+        LocalDateTime expiraEm = agora.plus(Duration.ofMinutes(VALIDADE_EM_MINUTOS));
+        String codigo = gerarCodigo();
+        jdbc.sql("INSERT INTO propostas_agendamento (codigo, dentista_id, paciente_id, data, hora, procedimento, "
+                        + "criada_em, expira_em) VALUES (:codigo, :d, :p, :data, :hora, :proc, :criada, :expira)")
+                .param("codigo", codigo).param("d", v.dentistaId()).param("p", v.pacienteId())
+                .param("data", v.data()).param("hora", v.hora()).param("proc", v.procedimento())
+                .param("criada", agora.toString()).param("expira", expiraEm.toString())
+                .update();
+        String dia = nomeDoDia(v.dia());
+        String resumo = "Consulta de " + v.procedimento() + " para " + v.paciente() + " com " + v.dentista()
+                + " em " + v.data() + " (" + dia + ") as " + v.hora() + ".";
+        return Resultado.ok(new PropostaAgendamento(codigo, resumo, v.dentista(), v.paciente(), v.data(), dia,
+                v.hora(), v.procedimento(), expiraEm.toString(), VALIDADE_EM_MINUTOS, PROXIMO_PASSO));
+    }
+
+    @Tool(description = "Efetiva um agendamento preparado, usando o codigoConfirmacao devolvido por "
+            + "prepararAgendamento. So chame depois que o usuario confirmar explicitamente o resumo. O codigo vale "
+            + "uma vez e expira em " + VALIDADE_EM_MINUTOS + " minutos; se expirar, prepare de novo.")
+    public Resultado<AgendamentoConfirmado> confirmarAgendamento(
+            @ToolParam(description = "Codigo de confirmacao devolvido por prepararAgendamento") String codigoConfirmacao) {
+        String codigo = codigoConfirmacao == null ? "" : codigoConfirmacao.trim().toUpperCase(Locale.ROOT);
+        if (codigo.isEmpty()) {
+            return Resultado.falha("Informe o codigoConfirmacao devolvido por prepararAgendamento.");
+        }
+        PropostaGravada proposta = buscarProposta(codigo).orElse(null);
+        if (proposta == null) {
+            return Resultado.falha("Codigo de confirmacao desconhecido. Chame prepararAgendamento para gerar um novo.");
+        }
+        if (CONFIRMADA.equals(proposta.status())) {
+            return Resultado.falha("Este codigo ja foi usado: a consulta " + proposta.consultaId()
+                    + " ja esta agendada para " + proposta.data() + " as " + proposta.hora() + ".");
+        }
+        if (!LocalDateTime.now(clock).isBefore(proposta.expiraEm())) {
+            return Resultado.falha("O codigo expirou (valia " + VALIDADE_EM_MINUTOS + " minutos). Chame "
+                    + "prepararAgendamento de novo para ver se o horario continua livre.");
+        }
+        // O tempo passou entre preparar e confirmar: o horario pode ter ficado para tras, o cadastro mudado...
+        Resultado<AgendamentoValidado> validacao = validarAgendamento(proposta.dentistaId(), proposta.pacienteId(),
+                proposta.data(), proposta.hora(), proposta.procedimento());
+        if (!validacao.sucesso()) {
+            return Resultado.falha(validacao.erro());
+        }
+        return transacao.execute(status -> efetivar(status, proposta, validacao.dados()));
     }
 
     @Tool(description = "Cancela uma consulta agendada pelo ID da consulta. So cancela consultas futuras. "
@@ -275,6 +302,138 @@ public class AgendamentoTools {
 
     // ---------- auxiliares (nao viram ferramentas) ----------
 
+    private record AgendamentoValidado(long dentistaId, String dentista, long pacienteId, String paciente,
+                                       LocalDate dia, LocalTime horario, String procedimento) {
+        String data() {
+            return dia.toString();
+        }
+
+        String hora() {
+            return HORA_FMT.format(horario);
+        }
+    }
+
+    private record PropostaGravada(String codigo, long dentistaId, long pacienteId, String data, String hora,
+                                   String procedimento, LocalDateTime expiraEm, String status, Long consultaId) {
+    }
+
+    /**
+     * Todas as regras de negocio de um agendamento, na ordem em que o usuario as percebe. Roda ao PREPARAR e de novo
+     * ao CONFIRMAR. A disponibilidade do horario nao entra aqui: ela e garantida pelo indice unico no INSERT.
+     */
+    private Resultado<AgendamentoValidado> validarAgendamento(Long dentistaId, Long pacienteId, String data,
+                                                              String hora, String procedimento) {
+        if (dentistaId == null) {
+            return Resultado.falha(INFORME_DENTISTA);
+        }
+        if (pacienteId == null) {
+            return Resultado.falha(INFORME_PACIENTE);
+        }
+        LocalDate dia = parseData(data);
+        if (dia == null) {
+            return Resultado.falha("Data invalida. Use o formato AAAA-MM-DD.");
+        }
+        LocalTime horario = parseHora(hora);
+        if (horario == null) {
+            return Resultado.falha("Horario invalido. Horarios possiveis: "
+                    + HORARIOS.stream().map(HORA_FMT::format).toList());
+        }
+        String erroDia = validarDia(dia);
+        if (erroDia != null) {
+            return Resultado.falha(erroDia);
+        }
+        if (jaPassou(dia, horario)) {
+            return Resultado.falha("Esse horario de hoje ja passou.");
+        }
+        Optional<String> dentista = nomeDoDentista(dentistaId);
+        if (dentista.isEmpty()) {
+            return Resultado.falha("Dentista nao encontrado: " + dentistaId);
+        }
+        Optional<String> paciente = nomeDoPaciente(pacienteId);
+        if (paciente.isEmpty()) {
+            return Resultado.falha("Paciente nao encontrado: " + pacienteId);
+        }
+        if (procedimento == null || procedimento.isBlank()) {
+            return Resultado.falha("Informe o procedimento.");
+        }
+        return Resultado.ok(new AgendamentoValidado(dentistaId, dentista.get(), pacienteId, paciente.get(), dia,
+                horario, procedimento.trim()));
+    }
+
+    /**
+     * Efetiva a proposta numa unica transacao: marca o codigo como usado, cria a consulta e liga as duas. Se algo
+     * falhar no meio (horario tomado por outra pessoa, por exemplo), tudo e desfeito e o codigo continua PENDENTE.
+     * O {@code UPDATE ... WHERE status = 'PENDENTE'} garante o uso unico mesmo com duas confirmacoes simultaneas.
+     */
+    private Resultado<AgendamentoConfirmado> efetivar(TransactionStatus status, PropostaGravada proposta,
+                                                      AgendamentoValidado v) {
+        int usadas = jdbc.sql("UPDATE propostas_agendamento SET status = '" + CONFIRMADA
+                        + "' WHERE codigo = :codigo AND status = '" + PENDENTE + "'")
+                .param("codigo", proposta.codigo()).update();
+        if (usadas == 0) {
+            status.setRollbackOnly();
+            return Resultado.falha("Este codigo acabou de ser usado em outra chamada. Use consultasDoPaciente "
+                    + "para ver a consulta.");
+        }
+        // O indice ux_consulta_ativa e a fonte da verdade contra dupla marcacao: so o INSERT, sem checagem
+        // previa (que teria janela de corrida). Apenas a violacao UNIQUE vira recusa de negocio; qualquer
+        // outra falha de banco propaga como erro tecnico (e desfaz a transacao).
+        try {
+            Long id = jdbc.sql("INSERT INTO consultas (dentista_id, paciente_id, data, hora, procedimento) "
+                            + "VALUES (:d, :p, :data, :hora, :proc) RETURNING id")
+                    .param("d", v.dentistaId()).param("p", v.pacienteId())
+                    .param("data", v.data()).param("hora", v.hora()).param("proc", v.procedimento())
+                    .query(Long.class).single();
+            jdbc.sql("UPDATE propostas_agendamento SET consulta_id = :id WHERE codigo = :codigo")
+                    .param("id", id).param("codigo", proposta.codigo()).update();
+            return Resultado.ok(new AgendamentoConfirmado(id, v.data(), v.hora(), v.procedimento()));
+        } catch (DuplicateKeyException e) {
+            status.setRollbackOnly();
+            return Resultado.falha(HORARIO_OCUPADO);
+        } catch (UncategorizedSQLException e) {
+            // O driver do SQLite nao informa SQLState, entao o Spring nao chega a traduzir para
+            // DuplicateKeyException: a violacao UNIQUE e reconhecida pelo codigo e pela mensagem.
+            if (violacaoUnique(e)) {
+                status.setRollbackOnly();
+                return Resultado.falha(HORARIO_OCUPADO);
+            }
+            throw e;
+        }
+    }
+
+    private Optional<PropostaGravada> buscarProposta(String codigo) {
+        return jdbc.sql("SELECT codigo, dentista_id, paciente_id, data, hora, procedimento, expira_em, status, "
+                        + "consulta_id FROM propostas_agendamento WHERE codigo = :codigo")
+                .param("codigo", codigo)
+                .query((rs, n) -> {
+                    long consulta = rs.getLong("consulta_id");
+                    return new PropostaGravada(rs.getString("codigo"), rs.getLong("dentista_id"),
+                            rs.getLong("paciente_id"), rs.getString("data"), rs.getString("hora"),
+                            rs.getString("procedimento"), LocalDateTime.parse(rs.getString("expira_em")),
+                            rs.getString("status"), rs.wasNull() ? null : consulta);
+                })
+                .optional();
+    }
+
+    private boolean horarioOcupado(AgendamentoValidado v) {
+        return jdbc.sql("SELECT COUNT(*) FROM consultas WHERE dentista_id = :d AND data = :data AND hora = :hora "
+                        + "AND status = 'AGENDADA'")
+                .param("d", v.dentistaId()).param("data", v.data()).param("hora", v.hora())
+                .query(Integer.class).single() > 0;
+    }
+
+    private static String gerarCodigo() {
+        StringBuilder codigo = new StringBuilder(TAMANHO_DO_CODIGO);
+        for (int i = 0; i < TAMANHO_DO_CODIGO; i++) {
+            codigo.append(ALFABETO_DO_CODIGO.charAt(ALEATORIO.nextInt(ALFABETO_DO_CODIGO.length())));
+        }
+        return codigo.toString();
+    }
+
+    private static String nomeDoDia(LocalDate dia) {
+        return dia.getDayOfWeek().getDisplayName(TextStyle.FULL, Locale.forLanguageTag("pt-BR"));
+    }
+
     private record ConsultaRef(String data, String hora, String status) {
     }
 
@@ -343,8 +502,11 @@ public class AgendamentoTools {
                 .param("id", id).query(Integer.class).single() > 0;
     }
 
-    private boolean pacienteExiste(long id) {
-        return jdbc.sql("SELECT COUNT(*) FROM pacientes WHERE id = :id")
-                .param("id", id).query(Integer.class).single() > 0;
+    private Optional<String> nomeDoDentista(long id) {
+        return jdbc.sql("SELECT nome FROM dentistas WHERE id = :id").param("id", id).query(String.class).optional();
+    }
+
+    private Optional<String> nomeDoPaciente(long id) {
+        return jdbc.sql("SELECT nome FROM pacientes WHERE id = :id").param("id", id).query(String.class).optional();
     }
 }

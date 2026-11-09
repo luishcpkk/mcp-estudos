@@ -1,29 +1,4 @@
 {
-  "agendarConsulta" : {
-    "inputSchema" : {
-      "$schema" : "https://json-schema.org/draft/2020-12/schema",
-      "additionalProperties" : false,
-      "properties" : {
-        "data" : {
-          "type" : "string"
-        },
-        "dentistaId" : {
-          "type" : "integer"
-        },
-        "hora" : {
-          "type" : "string"
-        },
-        "pacienteId" : {
-          "type" : "integer"
-        },
-        "procedimento" : {
-          "type" : "string"
-        }
-      },
-      "required" : [ "data", "dentistaId", "hora", "pacienteId", "procedimento" ],
-      "type" : "object"
-    }
-  },
   "buscarPaciente" : {
     "inputSchema" : {
       "$schema" : "https://json-schema.org/draft/2020-12/schema",
@@ -50,6 +25,19 @@
         }
       },
       "required" : [ "consultaId" ],
+      "type" : "object"
+    }
+  },
+  "confirmarAgendamento" : {
+    "inputSchema" : {
+      "$schema" : "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties" : false,
+      "properties" : {
+        "codigoConfirmacao" : {
+          "type" : "string"
+        }
+      },
+      "required" : [ "codigoConfirmacao" ],
       "type" : "object"
     }
   },
@@ -117,6 +105,31 @@
         }
       },
       "required" : [ ],
+      "type" : "object"
+    }
+  },
+  "prepararAgendamento" : {
+    "inputSchema" : {
+      "$schema" : "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties" : false,
+      "properties" : {
+        "data" : {
+          "type" : "string"
+        },
+        "dentistaId" : {
+          "type" : "integer"
+        },
+        "hora" : {
+          "type" : "string"
+        },
+        "pacienteId" : {
+          "type" : "integer"
+        },
+        "procedimento" : {
+          "type" : "string"
+        }
+      },
+      "required" : [ "data", "dentistaId", "hora", "pacienteId", "procedimento" ],
       "type" : "object"
     }
   }
