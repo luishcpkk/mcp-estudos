@@ -3,15 +3,10 @@ package com.example.mcpestudos;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InterruptedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.BooleanSupplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -45,7 +40,7 @@ class TransporteStdioConcorrenteTest {
     @Test
     @Timeout(180)
     void respondeATodasAsChamadasSimultaneasSemDerrubarOServidor() throws Exception {
-        var entrada = new EntradaDoServidor();
+        var entrada = new EntradaStdioEmMemoria();
         var saida = new ByteArrayOutputStream();
         var transporte = new StdioServerTransportProvider(McpJsonDefaults.getMapper(), entrada, saida);
         Tool eco = Tool.builder().name("eco").description("responde ok")
@@ -98,57 +93,6 @@ class TransporteStdioConcorrenteTest {
         long fim = System.currentTimeMillis() + limiteMs;
         while (!condicao.getAsBoolean() && System.currentTimeMillis() < fim) {
             Thread.sleep(20);
-        }
-    }
-
-    /** stdin do servidor: o teste enfileira texto, e read() bloqueia ate haver dado ou fim. */
-    private static final class EntradaDoServidor extends InputStream {
-        private static final byte[] FIM = new byte[0];
-        private final BlockingQueue<byte[]> fila = new LinkedBlockingQueue<>();
-        private byte[] atual = new byte[0];
-        private int posicao;
-        private boolean encerrada;
-
-        void enviar(String texto) {
-            fila.add(texto.getBytes(StandardCharsets.UTF_8));
-        }
-
-        void encerrar() {
-            fila.add(FIM);
-        }
-
-        @Override
-        public int read(byte[] destino, int inicio, int tamanho) throws IOException {
-            if (tamanho == 0) {
-                return 0;
-            }
-            try {
-                while (posicao >= atual.length) {
-                    if (encerrada) {
-                        return -1;
-                    }
-                    byte[] proximo = fila.take();
-                    if (proximo == FIM) {
-                        encerrada = true;
-                        return -1;
-                    }
-                    atual = proximo;
-                    posicao = 0;
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new InterruptedIOException();
-            }
-            int n = Math.min(tamanho, atual.length - posicao);
-            System.arraycopy(atual, posicao, destino, inicio, n);
-            posicao += n;
-            return n;
-        }
-
-        @Override
-        public int read() throws IOException {
-            byte[] um = new byte[1];
-            return read(um, 0, 1) == -1 ? -1 : um[0] & 0xff;
         }
     }
 }

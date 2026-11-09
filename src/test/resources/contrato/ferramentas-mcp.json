@@ -1,0 +1,123 @@
+{
+  "agendarConsulta" : {
+    "inputSchema" : {
+      "$schema" : "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties" : false,
+      "properties" : {
+        "data" : {
+          "type" : "string"
+        },
+        "dentistaId" : {
+          "type" : "integer"
+        },
+        "hora" : {
+          "type" : "string"
+        },
+        "pacienteId" : {
+          "type" : "integer"
+        },
+        "procedimento" : {
+          "type" : "string"
+        }
+      },
+      "required" : [ "data", "dentistaId", "hora", "pacienteId", "procedimento" ],
+      "type" : "object"
+    }
+  },
+  "buscarPaciente" : {
+    "inputSchema" : {
+      "$schema" : "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties" : false,
+      "properties" : {
+        "nome" : {
+          "type" : "string"
+        }
+      },
+      "required" : [ "nome" ],
+      "type" : "object"
+    }
+  },
+  "cancelarConsulta" : {
+    "inputSchema" : {
+      "$schema" : "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties" : false,
+      "properties" : {
+        "consultaId" : {
+          "type" : "integer"
+        },
+        "motivo" : {
+          "type" : "string"
+        }
+      },
+      "required" : [ "consultaId" ],
+      "type" : "object"
+    }
+  },
+  "consultarBaseClinica" : {
+    "inputSchema" : {
+      "$schema" : "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties" : false,
+      "properties" : {
+        "duvida" : {
+          "type" : "string"
+        },
+        "pacienteId" : {
+          "type" : "integer"
+        }
+      },
+      "required" : [ "duvida" ],
+      "type" : "object"
+    }
+  },
+  "consultasDoPaciente" : {
+    "inputSchema" : {
+      "$schema" : "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties" : false,
+      "properties" : {
+        "pacienteId" : {
+          "type" : "integer"
+        }
+      },
+      "required" : [ "pacienteId" ],
+      "type" : "object"
+    }
+  },
+  "dataDeHoje" : {
+    "inputSchema" : {
+      "$schema" : "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties" : false,
+      "properties" : { },
+      "required" : [ ],
+      "type" : "object"
+    }
+  },
+  "horariosLivres" : {
+    "inputSchema" : {
+      "$schema" : "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties" : false,
+      "properties" : {
+        "data" : {
+          "type" : "string"
+        },
+        "dentistaId" : {
+          "type" : "integer"
+        }
+      },
+      "required" : [ "data", "dentistaId" ],
+      "type" : "object"
+    }
+  },
+  "listarDentistas" : {
+    "inputSchema" : {
+      "$schema" : "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties" : false,
+      "properties" : {
+        "especialidade" : {
+          "type" : "string"
+        }
+      },
+      "required" : [ ],
+      "type" : "object"
+    }
+  }
+}

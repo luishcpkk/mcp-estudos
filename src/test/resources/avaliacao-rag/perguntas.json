@@ -1,0 +1,178 @@
+[
+  {
+    "id": "P01",
+    "tipo": "POSITIVA",
+    "pergunta": "Como é a dor da pulpite irreversível sintomática?",
+    "evidencias": [
+      { "fonte": "protocolo-emergencia-dor.pdf", "trecho": "piora ao deitar" }
+    ]
+  },
+  {
+    "id": "P02",
+    "tipo": "POSITIVA",
+    "pergunta": "Quais sinais indicam que o paciente deve ser encaminhado ao hospital com urgência?",
+    "evidencias": [
+      { "fonte": "protocolo-emergencia-dor.pdf", "trecho": "acionar o SAMU (192)" }
+    ]
+  },
+  {
+    "id": "P03",
+    "tipo": "POSITIVA",
+    "pergunta": "Qual é a dose máxima diária de paracetamol?",
+    "evidencias": [
+      { "fonte": "protocolo-emergencia-dor.pdf", "trecho": "Máximo de 3 g por dia" }
+    ]
+  },
+  {
+    "id": "P04",
+    "tipo": "POSITIVA",
+    "pergunta": "Quantos tubetes de anestésico com vasoconstritor posso usar em um paciente hipertenso?",
+    "evidencias": [
+      { "fonte": "protocolo-emergencia-dor.pdf", "trecho": "limitar a 2 tubetes com vasoconstritor por sessão" }
+    ]
+  },
+  {
+    "id": "P05",
+    "tipo": "POSITIVA",
+    "pergunta": "Quando devo prescrever antibiótico em um abscesso apical agudo?",
+    "evidencias": [
+      { "fonte": "protocolo-emergencia-dor.pdf", "trecho": "somente se houver febre, linfonodos aumentados" }
+    ]
+  },
+  {
+    "id": "P06",
+    "tipo": "POSITIVA",
+    "pergunta": "Qual antibiótico usar em quem é alérgico à penicilina?",
+    "evidencias": [
+      { "fonte": "protocolo-emergencia-dor.pdf", "trecho": "azitromicina 500 mg uma vez ao dia por 3 a 5 dias" }
+    ]
+  },
+  {
+    "id": "P07",
+    "tipo": "POSITIVA",
+    "pergunta": "Como tratar a alveolite, o alvéolo seco?",
+    "evidencias": [
+      { "fonte": "protocolo-emergencia-dor.pdf", "trecho": "curativo alveolar medicado" }
+    ]
+  },
+  {
+    "id": "P08",
+    "tipo": "POSITIVA",
+    "pergunta": "Quais testes clínicos devo fazer na avaliação da dor de dente?",
+    "evidencias": [
+      { "fonte": "protocolo-emergencia-dor.pdf", "trecho": "teste ao frio, percussão vertical e horizontal" }
+    ]
+  },
+  {
+    "id": "P09",
+    "tipo": "POSITIVA",
+    "pergunta": "Posso dar ibuprofeno para um paciente hipertenso?",
+    "evidencias": [
+      { "fonte": "protocolo-emergencia-dor.pdf", "trecho": "pode elevar a pressão e reduzir o efeito" }
+    ]
+  },
+  {
+    "id": "P10",
+    "tipo": "POSITIVA",
+    "pergunta": "O que fazer numa pericoronarite?",
+    "evidencias": [
+      { "fonte": "protocolo-emergencia-dor.pdf", "trecho": "irrigar com solução salina ou clorexidina 0,12%" }
+    ]
+  },
+  {
+    "id": "P11",
+    "tipo": "POSITIVA",
+    "pergunta": "Com qual pressão arterial não se deve fazer procedimento invasivo?",
+    "evidencias": [
+      { "fonte": "protocolo-emergencia-dor.pdf", "trecho": "igual ou acima de 180/110 mmHg" }
+    ]
+  },
+  {
+    "id": "C01",
+    "tipo": "POSITIVA",
+    "pergunta": "Qual é a alergia do Carlos?",
+    "pacienteId": 104,
+    "evidencias": [
+      { "fonte": "paciente-104-carlos_almeida.pdf", "trecho": "ALERGIA A PENICILINAS" }
+    ]
+  },
+  {
+    "id": "C02",
+    "tipo": "POSITIVA",
+    "pergunta": "Quais medicamentos o Carlos usa regularmente?",
+    "pacienteId": 104,
+    "evidencias": [
+      { "fonte": "paciente-104-carlos_almeida.pdf", "trecho": "Losartana potássica 50 mg" }
+    ]
+  },
+  {
+    "id": "C03",
+    "tipo": "POSITIVA",
+    "pergunta": "Qual foi o diagnóstico na última consulta do Carlos?",
+    "pacienteId": 104,
+    "evidencias": [
+      { "fonte": "paciente-104-carlos_almeida.pdf", "trecho": "pulpite irreversível sintomática do dente 46" }
+    ]
+  },
+  {
+    "id": "C04",
+    "tipo": "POSITIVA",
+    "pergunta": "Quando o Carlos deve voltar para continuar o tratamento?",
+    "pacienteId": 104,
+    "evidencias": [
+      { "fonte": "paciente-104-carlos_almeida.pdf", "trecho": "até 12/11/2026" }
+    ]
+  },
+  {
+    "id": "C05",
+    "tipo": "POSITIVA",
+    "pergunta": "O Carlos já extraiu algum dente?",
+    "pacienteId": 104,
+    "evidencias": [
+      { "fonte": "paciente-104-carlos_almeida.pdf", "trecho": "extração do dente 48" }
+    ]
+  },
+  {
+    "id": "X01",
+    "tipo": "POSITIVA",
+    "pergunta": "O Carlos pode tomar amoxicilina?",
+    "pacienteId": 104,
+    "evidencias": [
+      { "fonte": "paciente-104-carlos_almeida.pdf", "trecho": "ALERGIA A PENICILINAS" },
+      { "fonte": "protocolo-emergencia-dor.pdf", "trecho": "amoxicilina 500 mg por via oral a cada 8 horas" }
+    ]
+  },
+  {
+    "id": "X02",
+    "tipo": "POSITIVA",
+    "pergunta": "Posso receitar ibuprofeno para o Carlos?",
+    "pacienteId": 104,
+    "evidencias": [
+      { "fonte": "paciente-104-carlos_almeida.pdf", "trecho": "evitados por causa da hipertensão e do uso de losartana" },
+      { "fonte": "protocolo-emergencia-dor.pdf", "trecho": "pode elevar a pressão e reduzir o efeito" }
+    ]
+  },
+  {
+    "id": "N01",
+    "tipo": "NEGATIVA",
+    "pergunta": "Qual é o valor da consulta de ortodontia?"
+  },
+  {
+    "id": "N02",
+    "tipo": "NEGATIVA",
+    "pergunta": "Como tratar uma fratura de mandíbula?"
+  },
+  {
+    "id": "S01",
+    "tipo": "ESCOPO",
+    "pergunta": "Quais são as alergias do Carlos Almeida?",
+    "fontesProibidas": ["paciente-104-carlos_almeida.pdf"]
+  },
+  {
+    "id": "S02",
+    "tipo": "ESCOPO",
+    "pergunta": "Quais são as alergias do Carlos Almeida?",
+    "pacienteId": 1,
+    "fontesProibidas": ["paciente-104-carlos_almeida.pdf"]
+  }
+]

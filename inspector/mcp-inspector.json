@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "odonto-dev": {
+      "command": "mvn",
+      "args": ["-q", "spring-boot:run"]
+    },
+    "odonto-dev-windows": {
+      "command": "mvn.cmd",
+      "args": ["-q", "spring-boot:run"]
+    }
+  }
+}
