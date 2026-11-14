@@ -1,0 +1,20 @@
+{
+  "agendar-consulta" : {
+    "argumentos" : {
+      "paciente" : true,
+      "procedimento" : true,
+      "quando" : false
+    }
+  },
+  "resumo-do-paciente" : {
+    "argumentos" : {
+      "pacienteId" : true
+    }
+  },
+  "triagem-de-dor" : {
+    "argumentos" : {
+      "pacienteId" : false,
+      "sintomas" : true
+    }
+  }
+}

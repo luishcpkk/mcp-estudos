@@ -24,9 +24,16 @@ se não se sabe de quem é um documento, o seguro é não oferecê-lo a nenhuma 
 > `pacienteId` é o modelo, a pedido do usuário. Evita o vazamento acidental entre pacientes numa pergunta
 > genérica; não impede que alguém peça de propósito o histórico de outro paciente.
 
+Por isso todo acesso ao histórico de um paciente fica **registrado** (quando, por qual ferramenta, quantos trechos; nunca a
+pergunta nem o texto). Quem pediu o histórico de outro paciente de propósito deixa rastro: veja a seção
+*Auditoria de acessos ao histórico* do [README do projeto](../../../../README.md) e a ferramenta `acessosAoHistorico`.
+
 ## Outras regras
 
 - Só PDFs com **texto selecionável** são indexados; PDFs escaneados (apenas imagem) são ignorados.
+- Um PDF cujo texto parece conter **instruções dirigidas ao assistente** (por exemplo "ignore as instruções anteriores", ou o nome
+  de uma ferramenta do servidor) é **isolado inteiro**: nada dele é indexado, e o log diz quais regras dispararam e em que
+  páginas. Veja *Defesa contra injeção de prompt nos PDFs* no [README do projeto](../../../../README.md).
 - Os `*.pdf` desta pasta **não são versionados** (veja o `.gitignore`), para que prontuários não vão parar
   no GitHub. Para versionar um protocolo público: `git add -f`.
 - Para usar uma pasta fora do projeto, defina `clinica.rag.docs-location`, por exemplo

@@ -39,6 +39,47 @@ final class PdfsDeTeste {
         }
     }
 
+    /**
+     * Cria um PDF de uma pagina com um texto visivel e outro INVISIVEL (branco sobre a folha branca, corpo 6 por padrao): uma pessoa
+     * nao ve o segundo, mas o leitor de PDF o extrai como qualquer outro texto. E assim que se esconde uma instrucao num
+     * documento de aparencia normal.
+     */
+    static void criarComTextoOculto(Path arquivo, String visivel, String oculto) throws IOException {
+        criarComTextoOculto(arquivo, visivel, oculto, 6);
+    }
+
+    /**
+     * O {@code corpoDoOculto} importa: quanto menor a fonte, mais linhas em branco o leitor de PDF do Spring AI
+     * "enxerga" entre o texto visivel e o oculto, e abaixo de 1 ponto ele estoura a pilha (veja
+     * {@code DocumentIngestionServiceTest}).
+     */
+    static void criarComTextoOculto(Path arquivo, String visivel, String oculto, float corpoDoOculto)
+            throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage pagina = new PDPage();
+            doc.addPage(pagina);
+            PDType1Font fonte = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, pagina)) {
+                cs.beginText();
+                cs.setFont(fonte, 11);
+                cs.setLeading(14);
+                cs.newLineAtOffset(50, 750);
+                for (String linha : quebrar(visivel, 85)) {
+                    cs.showText(linha);
+                    cs.newLine();
+                }
+                cs.endText();
+                cs.setNonStrokingColor(1f, 1f, 1f);
+                cs.beginText();
+                cs.setFont(fonte, corpoDoOculto);
+                cs.newLineAtOffset(50, 20);
+                cs.showText(oculto);
+                cs.endText();
+            }
+            doc.save(arquivo.toFile());
+        }
+    }
+
     /** Cria um PDF de uma pagina sem texto, como um documento escaneado. */
     static void criarEmBranco(Path arquivo) throws IOException {
         try (PDDocument doc = new PDDocument()) {

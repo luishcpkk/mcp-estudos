@@ -1,0 +1,22 @@
+{
+  "clinica://dentistas" : {
+    "mimeType" : "application/json",
+    "modeloDeUri" : false,
+    "name" : "dentistas"
+  },
+  "clinica://protocolos" : {
+    "mimeType" : "application/json",
+    "modeloDeUri" : false,
+    "name" : "protocolos"
+  },
+  "clinica://protocolos/{arquivo}" : {
+    "mimeType" : "text/plain",
+    "modeloDeUri" : true,
+    "name" : "protocolo"
+  },
+  "clinica://regras-de-agendamento" : {
+    "mimeType" : "text/markdown",
+    "modeloDeUri" : false,
+    "name" : "regras-de-agendamento"
+  }
+}

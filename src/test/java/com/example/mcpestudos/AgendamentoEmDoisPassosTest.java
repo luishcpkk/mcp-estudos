@@ -72,7 +72,8 @@ class AgendamentoEmDoisPassosTest {
     }
 
     private AgendamentoTools ferramentasEm(String instante) {
-        return new AgendamentoTools(jdbc, Clock.fixed(Instant.parse(instante), SP), transacao);
+        Clock relogio = Clock.fixed(Instant.parse(instante), SP);
+        return new AgendamentoTools(jdbc, relogio, transacao, new AuditoriaDeAcessos(jdbc, relogio));
     }
 
     private int contar(String tabela) {

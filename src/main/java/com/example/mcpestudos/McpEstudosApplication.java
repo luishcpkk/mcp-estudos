@@ -24,9 +24,10 @@ public class McpEstudosApplication {
         return Clock.system(FUSO_CLINICA);
     }
 
-    /** Expoe como ferramentas MCP os metodos @Tool de agendamento e de consulta a base clinica. */
+    /** Expoe como ferramentas MCP os metodos @Tool de agendamento, de consulta a base clinica e de auditoria. */
     @Bean
-    ToolCallbackProvider clinicaToolProvider(AgendamentoTools agendamento, ConsultorClinicoTools consultor) {
-        return MethodToolCallbackProvider.builder().toolObjects(agendamento, consultor).build();
+    ToolCallbackProvider clinicaToolProvider(AgendamentoTools agendamento, ConsultorClinicoTools consultor,
+                                             AuditoriaTools auditoria) {
+        return MethodToolCallbackProvider.builder().toolObjects(agendamento, consultor, auditoria).build();
     }
 }
